@@ -1,0 +1,103 @@
+---
+- name: Add server names passed in to the Playbook
+  hosts: all,localhost
+  gather_facts: no 
+  run_once: true
+  tasks: 
+    - name: Add server names to the Ansible inventory 
+      when: target is defined 
+      add_host: 
+        name: '{{ item }}' 
+        groups: '{{ ansible_inventory_groups|default(omit) }}' 
+      with_items: 
+        - "{{ target.replace(',','\n').split() }}" 
+      changed_when: false 
+
+- name: Full Database Patching Playbook - Pre-Tasks
+  hosts: localhost
+  gather_facts: no
+  pre_tasks: 
+    - name: Send Starting Notification
+      include_tasks: notification.yml
+      vars:
+        - call: "start"
+        - summary_state: "patching"
+
+    - name: Validate Inventory
+      block:
+        - name: Validate that the Database is in the Inventory Dictionary
+          debug:
+            msg: "{{ item }}"
+          with_items:
+            - "{{sid_server_dict[DATABASE_NAME]}}"
+      rescue:
+        - name: Send Notification
+          include_tasks: notification.yml
+          vars:
+            - call: "fail"
+            - summary_state: "patching"
+        - name: Check if Fail
+          fail: 
+            msg: "Fail"
+
+- name: Full Database Patching Playbook - PREREQS ONLY
+  hosts: "{{ target }}"
+  tasks:
+    - name: Initialize
+      block:
+        - name: Initialize
+          import_role:
+            name: initialization_role
+      rescue:
+        - name: Checking Initialize Playbook
+          include_tasks: notification.yml
+          vars:
+            - call: "fail"
+            - summary_state: "patching"
+        - name: Check if Fail
+          fail: 
+            msg: "Fail"
+
+    - name: Run Prereq
+      block:
+        - name: Run Prereq
+          import_role:
+            name: oracle_database_patch_role
+            tasks_from: run_prereq
+      rescue:
+        - set_fact:
+            notification_call: "{{ 'unneeded' if hostvars[item].check_if == 'two' else 'fail' }}"
+          with_items:
+            - "{{ target }}"
+        - name: Remove old patching files
+          include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: Checking Run Prereq
+          include_tasks: notification.yml
+          vars:
+            - call: "{{ notification_call }}"
+            - summary_state: "patching"
+        - name: Check if Fail
+          fail: 
+            msg: "Fail"
+
+  post_tasks:
+    - name: Final Database patching cleanup
+      block:
+        - name: Remove old patching files
+          import_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+      rescue:
+        - name: Checking Remove old patching files
+          include_tasks: notification.yml
+          vars:
+            - call: "fail"
+            - summary_state: "patching"
+
+    - name: Send Success Notification
+      include_tasks: notification.yml
+      vars:
+        - call: "success"
+        - summary_state: "patching"

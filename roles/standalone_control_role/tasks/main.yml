@@ -1,0 +1,79 @@
+---
+- name: Standalone Database Control
+  block:
+  - name: Running DB check  
+    debug:
+      msg:
+        - "Server Name: {{ server_name }}"
+        - "Database Name : {{ ORACLE_SID }}"
+        - "Time: {{ lookup('pipe','date +%Y-%m-%d--%H.%M.%S') }}"
+
+  - name: Verify inputs entered
+    fail:
+      msg: "Please check the inputs entered"
+    when: (server_name == "") or (ORACLE_SID == "")
+
+  - set_fact:
+      PDB_NAME: "{{ sid_server_dict[ORACLE_SID].pdb }}"
+
+  - block:
+    - name: Checking if database VIP is pingable
+      shell: ping -c2 {{ sid_server_dict[ORACLE_SID].dbvip }}
+      register: vip_ping_log1
+
+    - name: Show database VIP ping status
+      debug:
+        msg: "{{ vip_ping_log1.stdout_lines }}"
+
+  - name: Create remote log output directory if not exist
+    file:
+      state: directory
+      recurse: yes
+      path: "{{ remote_output_directory }}"
+    delegate_to: "{{ server_name }}"
+    become: yes
+    become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+    become_method: sudo
+
+- name: Startup Database
+  block:
+    - name: Rename alert logs
+      import_tasks: rename_logs.yml
+
+    - name: Import task to start oracle database (and PDB if multitenant)
+      import_tasks: start_database.yml
+
+    - name: Import task to check alert log for errors
+      import_tasks: check_alert_log.yml
+
+    - block:
+      - import_tasks: start_listener.yml
+      - import_tasks: check_listener_logs.yml
+
+    - import_tasks: start_pdb_listener.yml 
+      when: PDB_NAME != ""
+
+    - name: Playbook completed successfully for {{ORACLE_SID}}
+      debug:
+        msg: "Playbook completed."
+  
+  when:
+    - control_command == "startup"
+
+- name: Shutdown Database
+  block:
+    - import_tasks: stop_pdb_listener.yml
+      when: PDB_NAME != ""
+
+    - name: Import the task to shutdown the db listener
+      import_tasks: stop_listener.yml
+
+    - name: Import task to shutdown oracle database
+      import_tasks: stop_database.yml
+
+    - name: Playbook completed successfully
+      debug:
+        msg: "Shutdown completed."
+  
+  when:
+    - control_command == "shutdown"

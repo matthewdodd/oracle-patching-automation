@@ -1,0 +1,33 @@
+---
+##This script renames existing alert log and listener logs so that new logs will be created.
+
+- name: copy rename_logs script to {{ server_name }}
+  vars:
+  copy:
+    src: "{{ rename_logs_script }}"
+    dest: "{{ remote_script_directory }}/{{ rename_logs_script }}"
+    mode: "{{script_permission}}"
+    force: yes
+  delegate_to: "{{ server_name }}"
+
+- name: Rename alert log for {{ ORACLE_SID }}
+  vars:
+    listenerA: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
+    listenerB: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"
+  shell: >
+    {{ remote_script_directory }}/{{ rename_logs_script }}
+    {{ ORACLE_SID }} {{listenerA}} {{listenerB}}
+    &> >(tee {{ remote_output_directory }}/log.{{ rename_logs_script }}.`date +"%Y.%m.%d"`)
+  args:
+    executable: /usr/bin/bash
+  delegate_to: "{{ server_name }}"
+  register: rename_logs_status
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+  failed_when: rename_logs_status.rc != 4 and rename_logs_status.rc != 0
+
+- name: print rename_logs_script status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ rename_logs_status.stdout_lines }}"
+  failed_when: rename_logs_status.rc == 4

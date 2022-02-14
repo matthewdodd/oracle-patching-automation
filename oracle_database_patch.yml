@@ -1,0 +1,189 @@
+---
+- name: Add server names passed in to the Playbook
+  hosts: all,localhost
+  gather_facts: no 
+  run_once: true
+  tasks: 
+    - name: Add server names to the Ansible inventory 
+      when: target is defined 
+      add_host: 
+        name: '{{ item }}' 
+        groups: '{{ ansible_inventory_groups|default(omit) }}' 
+      with_items: 
+        - "{{ target.replace(',','\n').split() }}" 
+      changed_when: false 
+
+- name: Full Database Patching Playbook - Pre-Tasks
+  hosts: localhost
+  gather_facts: no
+  pre_tasks: 
+    - name: Send Starting Notification
+      include_tasks: notification.yml
+      vars:
+        - call: "start"
+        - summary_state: "patching"
+
+    - name: Validate Inventory
+      block:
+        - name: Validate that the Database is in the Inventory Dictionary
+          debug:
+            msg: "{{ item }}"
+          with_items:
+            - "{{sid_server_dict[DATABASE_NAME]}}"
+      rescue:
+        - name: Send Notification
+          include_tasks: notification.yml
+          vars:
+            - call: "fail"
+            - summary_state: "patching"
+        - name: Check if Fail
+          fail: 
+            msg: "Fail"
+
+    - name: Validate Change Ticket
+      block:
+        - name: Change Ticket Validation
+          include_tasks: oracle_chg_ticket.yml
+      rescue:
+        - name: Checking Change Ticket Validation
+          include_tasks: notification.yml
+          vars:
+            - call: "fail"
+            - summary_state: "patching"
+        - name: Check if Fail
+          fail: 
+            msg: "Fail"
+      when:
+        - override_chg == "false"
+
+- name: Full Database Patching Playbook - Tasks
+  hosts: "{{ target }}"
+  tasks:
+    - name: Initialize
+      block:
+        - name: Initialize
+          import_role:
+            name: initialization_role
+      rescue:
+        - name: init
+          delegate_to: 127.0.0.1
+          block:
+          - name: Checking Initialize Playbook
+            include_tasks: notification.yml
+            vars:
+              - call: "fail"
+              - summary_state: "patching"
+          - name: Check if Fail
+            fail: 
+              msg: "Fail"
+
+    - name: Run Prereq
+      block:
+        - name: Run Prereq
+          import_role:
+            name: oracle_database_patch_role
+            tasks_from: run_prereq
+      rescue:
+        - name: prereq1
+          block:
+          - set_fact:
+              notification_call: "{{ 'unneeded' if hostvars[item].check_if == 'two' else 'fail' }}"
+            with_items:
+              - "{{ target }}"
+          - name: Remove old patching files
+            include_role:
+              name: oracle_database_patch_role
+              tasks_from: clean_files_from_server
+        - name: prereq2
+          delegate_to: 127.0.0.1
+          block:
+          - name: Checking Run Prereq
+            include_tasks: notification.yml
+            vars:
+              - call: "{{ notification_call }}"
+              - summary_state: "patching"
+          - name: Check if Fail
+            fail: 
+              msg: "Fail"
+
+    - name: Shutdown the Oracle Database
+      block:
+        - name: Shutdown the Oracle Database
+          include_tasks: oracle_control_sid.yml
+          vars:
+            - control: "shutdown"
+            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+      rescue:
+        - name: Cleanup Shutdown if Fail
+          include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: shutdown
+          delegate_to: 127.0.0.1
+          block:
+            - name: Notify for failure
+              include_tasks: notification.yml
+              vars:
+                - call: "fail"
+                - summary_state: "patching"
+            - name: Check if Fail
+              fail: 
+                msg: "Fail"
+
+    - name: Patch the Oracle Database
+      block:
+        - name: Patch the Oracle Database
+          import_role:
+            name: oracle_database_patch_role
+      rescue:
+        - name: patch
+          delegate_to: 127.0.0.1
+          block:
+            - name: Notify for failure
+              include_tasks: notification.yml
+              vars:
+                - call: "fail"
+                - summary_state: "patching"
+            - name: Check if Fail
+              fail: 
+                msg: "Fail"
+
+    - name: Startup the Oracle Database
+      block:
+        - name: Startup the Oracle Database
+          include_tasks: oracle_control_sid.yml
+          vars:
+            - control: "startup"
+            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+      rescue:
+        - name: Cleanup Startup if Fail
+          include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: startup
+          delegate_to: 127.0.0.1
+          block:
+            - name: Notify for failure
+              include_tasks: notification.yml
+              vars:
+                - call: "fail"
+                - summary_state: "patching"
+            - name: Check if Fail
+              fail: 
+                msg: "Fail"
+
+  post_tasks:
+    - name: Remove old patching files
+      ignore_errors: yes
+      import_role:
+        name: oracle_database_patch_role
+        tasks_from: clean_files_from_server
+
+    - name: shutdown
+      delegate_to: 127.0.0.1
+      block:
+        - name: Send Success Notification
+          include_tasks: notification.yml
+          vars:
+            - call: "success"
+            - summary_state: "patching"

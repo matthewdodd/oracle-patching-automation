@@ -1,0 +1,46 @@
+---
+- name: Run prereq
+  become: yes
+  become_user: "{{sid_server_dict[ORACLE_SID].dbowner}}"
+  block:
+    - set_fact:
+        check_if: "one"
+
+    - name: Download and copy patch to server
+      include: copy_files_to_server.yml
+      vars:
+        artf_file_name: "{{ patch_file_name }}"
+        temp_dir: "{{ patch_folder_name }}"
+
+    - name: Update $ORACLE_HOME/QOpatch/qopiprep.bat for AIX/12.1c
+      shell: |
+        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} qopiprep {{ patch_folder_name }}
+      register: shell_output
+      failed_when: shell_output.rc != 0
+      when:
+        - ansible_distribution == "AIX"
+        - db_ver == "12.1"
+
+    - set_fact:
+        check_if: "two"
+
+    - name: Check if we should apply patch
+      shell: |
+        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} status {{ patch_folder_name }}
+      register: shell_output
+      failed_when: shell_output.rc != 0
+
+    - set_fact:
+        check_if: "three"
+
+    - name: Run prereq
+      shell: |
+        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} prereq {{ patch_folder_name }}
+      register: shell_output
+      failed_when: shell_output.rc != 0
+
+    - name: Run utlrp.sql
+      shell: |
+        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} utlrp {{ patch_folder_name }}
+      register: shell_output
+      failed_when: shell_output.rc != 0

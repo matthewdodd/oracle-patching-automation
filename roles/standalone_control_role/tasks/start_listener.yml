@@ -1,0 +1,23 @@
+---
+##This script starts the listener
+
+- name: Start listener {{ listener }} in {{ ORACLE_SID }} on {{ server_name }}
+  shell:
+  vars:
+    LISTENER: "{{ sid_server_dict[ORACLE_SID].dbListener }}" 
+  args:
+    executable: /usr/bin/bash
+    cmd: >
+      {{ remote_script_directory }}/listener_ctl.bash start {{ ORACLE_SID }} {{ LISTENER }} 
+      &> >(tee {{ remote_output_directory }}/log.{{ start_listener_script }}.`date +"%Y.%m.%d"`)
+  delegate_to: "{{ server_name }}"
+  register: listener_start_status
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+  failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0
+
+- name: print start_listener_script status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ listener_start_status.stdout_lines }}"
+  failed_when: listener_start_status.rc == 4

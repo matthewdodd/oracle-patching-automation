@@ -1,0 +1,35 @@
+---
+#tasks file for Oracle Database Patching
+
+- set_fact:
+    ORACLE_SID: "{{ DATABASE_NAME }}"
+    script_permission: 0777
+    server_name: "{{ target }}"
+
+- name: Copy Scripts to {{ remote_script_directory }}
+  block:
+    - name: Create roles/oracle_database_patch_role/files if not exist
+      copy: src=roles/oracle_database_patch_role/files/ dest={{ remote_script_directory }}/oracle_database_patch_role mode=777
+
+- name: Oracle Database Patching
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  block:
+    - name: Apply Patch for {{ DATABASE_NAME }}
+      shell: |
+        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} apply {{ patch_folder_name }}
+      async: 4000
+      poll: 0
+      register: shell_output
+
+    - name: "Check on an async task: Apply Patch for {{ DATABASE_NAME }}"
+      async_status:
+        jid: "{{ shell_output.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 120
+      delay: 120
+
+    - debug:
+        var: job_result.stdout_lines
+      failed_when: job_result.rc != 0

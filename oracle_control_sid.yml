@@ -1,0 +1,17 @@
+##startup/shutdown oracle database by sid
+
+---
+- set_fact:
+    ORACLE_SID: "{{ DATABASE_NAME|lower }}"
+    server_name: "{{ target }}"
+
+- name: Startup/Shutdown database playbook given SID
+  block:
+    - name: initiating standalone_control_role
+      vars:
+        - control_command: "{{ control }}"
+      include_role:
+        name: standalone_control_role
+      when: 
+        - server_name is defined 
+   

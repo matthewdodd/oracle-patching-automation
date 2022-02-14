@@ -1,0 +1,28 @@
+---
+- name: Remove {{ remote_script_directory }} if exists
+  block:
+    - name: Remove {{ remote_script_directory }} if exists - ansibleUser
+      ansible.builtin.file:
+        path: "{{ remote_script_directory }}"
+        state: absent
+  rescue:
+    - name: Remove {{ remote_script_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
+      become: yes
+      become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
+      ansible.builtin.file:
+        path: "{{ remote_script_directory }}"
+        state: absent
+
+- name: Remove {{ remote_output_directory }} if exists
+  block:
+    - name: Remove {{ remote_output_directory }} if exists - ansibleUser
+      ansible.builtin.file:
+        path: "{{ remote_output_directory }}"
+        state: absent
+  rescue:
+    - name: Remove {{ remote_output_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
+      become: yes
+      become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
+      ansible.builtin.file:
+        path: "{{ remote_output_directory }}"
+        state: absent
