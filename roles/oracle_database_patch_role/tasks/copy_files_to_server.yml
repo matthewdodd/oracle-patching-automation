@@ -1,0 +1,62 @@
+---
+- name: Copy files to server
+  become: yes
+  become_user: "{{ b_user }}"
+  block:
+    - set_fact:
+        download_dir: "{{ temp_dir }}"
+
+    - name: Remove prior {{ temp_dir }}
+      file:
+        state: absent
+        path: "{{ temp_dir }}/"
+
+    - name: Create {{ temp_dir }}
+      ansible.builtin.file:
+        path: "{{ temp_dir }}"
+        state: directory
+        mode: "{{ script_permission }}"
+
+    - name: Download {{ artf_file_name }} from {{ artifactory_repo }} to {{ download_dir }}
+      ansible.builtin.get_url:
+        url: '{{ artifactory_repo }}/{{ artf_file_name }}'
+        dest: '{{ download_dir }}/{{ artf_file_name }}'
+        validate_certs: no
+        force_basic_auth: yes
+        mode: "{{ script_permission }}"
+        tmp_dest: "{{ temp_dir }}"
+        use_proxy: no
+
+    - name: Extract {{ artf_file_name }} into {{ temp_dir }}
+      ansible.builtin.unarchive:
+        remote_src: yes
+        src: "{{ download_dir }}/{{ artf_file_name }}"
+        dest: "{{ temp_dir }}"
+
+    - name: Remove {{ download_dir }}/{{ artf_file_name }}
+      file:
+        state: absent
+        path: "{{ item }}"
+      loop:
+        - "{{ download_dir }}/{{ artf_file_name }}"
+      ignore_errors: true
+
+    - name : Find all files in "{{ temp_dir }}"
+      find:
+        paths: "{{ temp_dir }}"
+        patterns: '*.zip,*.tar.gz'
+      register: output
+    
+    - name: Extract all files into {{ temp_dir }}
+      ansible.builtin.unarchive:
+        remote_src: yes
+        src: "{{ item.path }}"
+        dest: "{{ temp_dir }}"
+      with_items: "{{ output.files }}"
+      
+    - name: Change Permissions of all files in {{ temp_dir }}
+      file:
+        path: "{{ temp_dir }}"
+        state: directory
+        recurse: yes
+        mode: "{{ script_permission }}"

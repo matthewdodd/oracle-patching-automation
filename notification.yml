@@ -1,0 +1,59 @@
+---
+- set_fact:
+    task_runner: "{{ tower_user_name if tower_user_name is defined else 'scheduler' }}"
+    sched_name: "{{ tower_schedule_name if tower_schedule_name is defined else 'manual job' }}"
+    webhook_url: "office.com/webhookURL"
+    notify_state: "{{ 'started' if call == 'start' else ( 'completed' if call == 'success' else ( 'been skipped; unneeded' if call == 'unneeded' else ( 'failed' if call == 'fail') ) ) }}"
+    prereq_notify_state: "{{ 'started' if call == 'start_prereq' else ( 'completed' if call == 'success_prereq' else 'failed' ) }}"
+    notify_colour: "{{ '13E81D' if call == 'start' else ( '11A8E8' if call == 'success' else ( '11A8E8' if call == 'unneeded' else 'f21818' ) ) }}"
+    prereq_notify_colour: "{{ '13E81D' if call == 'start_prereq' else ( '11A8E8' if call == 'success_prereq' else 'f21818' ) }}"
+
+- name: Send Patching Card
+  office_365_connector_card:
+    webhook: "{{ webhook_url }}"
+    title: "Job #{{ tower_job_id }} '{{ tower_job_template_name }}'"
+    summary: "'{{ DATABASE_NAME }}' is being patched"
+    sections:
+    - title: Database patching has {{ notify_state }}
+      facts:
+      - name: "Database"
+        value: "{{ DATABASE_NAME }}" 
+      - name: "Host"
+        value: "{{ target }}" 
+      - name: "Change Ticket"
+        value: "{{ TICKET_NUMBER }}"
+      - name: "URL" 
+        value: "https://ansibletower.domain.com/#/jobs/playbook/{{ tower_job_id }}"
+      - name: "Running User"
+        value: "{{ task_runner }}"
+      - name: "Scheduled Job Name"
+        value: "{{ sched_name }}"
+    color: "{{ notify_colour }}"
+  environment:
+    https_proxy: http://proxy-mwg-http.glb.ca.sunlife:8080
+  when: summary_state == "patching"
+
+- name: Send Prerequisite Check Card
+  office_365_connector_card:
+    webhook: "{{ webhook_url }}"
+    title: "Job #{{ tower_job_id }} '{{ tower_job_template_name }}'"
+    summary: "'{{ DATABASE_NAME }}' prerequisite check"
+    sections:
+    - title: Database prerequisite check has {{ prereq_notify_state }}
+      facts:
+      - name: "Database"
+        value: "{{ DATABASE_NAME }}" 
+      - name: "Host"
+        value: "{{ target }}" 
+      - name: "Change Ticket"
+        value: "{{ TICKET_NUMBER }}"
+      - name: "URL" 
+        value: "https://ansibletower.domain.com/#/jobs/playbook/{{ tower_job_id }}"
+      - name: "Running User"
+        value: "{{ task_runner }}"
+      - name: "Scheduled Job Name"
+        value: "{{ sched_name }}"
+    color: "{{ prereq_notify_colour }}"
+  environment:
+    https_proxy: http://proxy-mwg-http.glb.ca.sunlife:8080
+  when: summary_state == "prereq"

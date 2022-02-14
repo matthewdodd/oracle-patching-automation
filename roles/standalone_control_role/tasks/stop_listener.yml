@@ -1,0 +1,29 @@
+---
+##This script stops the listener
+
+- name: copy listener script to {{ server_name }}
+  copy:
+    src: "{{ stop_listener_script }}"
+    dest: "{{ remote_script_directory }}/{{ stop_listener_script }}"
+    mode: "{{script_permission}}"
+    force: yes
+  delegate_to: "{{ server_name }}"
+
+- name: Stop listener {{ listener }} in {{ ORACLE_SID }} on {{ server_name }}
+  shell:
+  vars:
+    LISTENER: "{{ sid_server_dict[ORACLE_SID].dbListener }}"   
+  args:
+    executable: /usr/bin/bash
+    cmd: >
+      {{ remote_script_directory }}/listener_ctl.bash stop {{ ORACLE_SID }} {{ LISTENER }}
+      2>&1 | tee {{ remote_output_directory }}/log.{{ stop_listener_script }}.`date +"%Y.%m.%d"`
+  delegate_to: "{{ server_name }}"
+  register: listener_stop_status
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+
+- name: print listener_stop_status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ listener_stop_status.stdout_lines }}"

@@ -1,0 +1,28 @@
+---
+# vars file for standalone_control_role
+
+standalone_control_role_role_version: v1.0.0
+timeToPause: 120
+
+##Cannot use ~/ansiblescripts because ssh connects as ansible user for copying files.
+##After becoming a particular os user, the home directory ~ is different.
+remote_script_directory_base: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
+remote_output_directory_base: ~/ansiblescripts/startup/log
+
+remote_script_directory: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
+remote_output_directory: "/tmp/ora_db_patch_{{ DATABASE_NAME }}"
+
+script_permission: 0777
+check_mount_script: check_mount.bash
+check_timestamp_script: check_timestamp.bash
+check_alertLog_script: check_alert_log.bash
+check_listenerLogs_script: check_listener_logs.bash
+rename_logs_script: rename_logs.bash
+start_database_script: database_ctl.bash
+start_listener_script: listener_ctl.bash
+start_pdb_script: pdb_ctl.bash
+start_pdbListener_script: pdb_listener_ctl.bash
+stop_pdb_script: pdb_ctl.bash
+stop_pdbListener_script: listener_ctl.bash
+stop_database_script: database_ctl.bash
+stop_listener_script: listener_ctl.bash

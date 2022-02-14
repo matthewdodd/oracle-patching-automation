@@ -1,0 +1,19 @@
+---
+###This script starts the database
+
+- name: start oracle database on {{ server_name }}
+  shell: >
+    {{ remote_script_directory }}/{{ start_database_script }} start {{ ORACLE_SID }}
+  args:
+    executable: /usr/bin/bash
+  delegate_to: "{{ server_name }}"
+  register: db_start_status
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+  failed_when: db_start_status.rc != 4 and db_start_status.rc != 0
+
+- name: print start_database_script status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ db_start_status.stdout_lines }}"
+  failed_when: db_start_status.rc == 4

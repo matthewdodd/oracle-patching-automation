@@ -1,0 +1,27 @@
+---
+### This script stops the database
+
+- name: copy stop_database_script to {{ server_name }}
+  copy:
+    src: "{{ stop_database_script }}"
+    dest: "{{ remote_script_directory }}/{{ stop_database_script }}"
+    mode: "{{script_permission}}"
+    force: yes
+  delegate_to: "{{ server_name }}"
+
+- name: Shutdown oracle database {{ ORACLE_SID }}
+  shell: >
+    {{ remote_script_directory }}/{{ stop_database_script }} stop {{ ORACLE_SID }} 
+#    2>&1 | tee {{ remote_output_directory }}/log.{{ stop_database_script }}.`date +"%Y.%m.%d"`
+  args:
+    executable: /usr/bin/bash
+  delegate_to: "{{ server_name }}"
+  register: db_stop_status
+  ignore_errors: yes
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+
+- name: print Shutdown db status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ db_stop_status.stdout_lines }}"

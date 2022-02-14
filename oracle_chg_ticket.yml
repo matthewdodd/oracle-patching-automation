@@ -1,0 +1,46 @@
+---
+- name: Validate ServiceNow Change Ticket
+  block:
+    - debug:
+        - msg: 'The SNOW Ticket # is: {{ TICKET_NUMBER }}'
+        - msg: 'SNOW info is: USER - {{ snow_user }} ; INSTANCE - {{ snow_instance|default("sunlife") }}'
+
+    - name: Retrieve change record state from ServiceNow
+      snow_record_find:
+        username: '{{ snow_user }}'
+        password: '{{ snow_password }}'
+        instance: '{{ snow_instance|default("sunlife") }}'
+        table: change_request
+        query:
+          number: '{{ TICKET_NUMBER }}'
+        return_fields:
+          - number
+          - state
+      register: snow_record_find_result
+      environment:
+        https_proxy: 'http://proxy-mwg-http.glb.ca.sunlife:8080'
+    - debug:
+        msg: "{{ snow_record_find_result }}"
+    
+    - debug:
+        msg: 
+          - "Possible Change Ticket States:"
+          - "State     | Value"
+          - "----------|------"
+          - "New       | -5"
+          - "Assess    | -4"
+          - "Authorize | -3"
+          - "Scheduled | -2"
+          - "Implement | -1"
+          - "Review    |  0"
+          - "Closed    |  3"
+          - "Cancelled |  4"
+    - debug: 
+        msg: "Change record {{ TICKET_NUMBER }} state is {{ snow_record_find_result.record[0].state }}"
+  
+    - name: Assert that the change record is in the right state
+      ansible.builtin.assert:
+        that:
+          - snow_record_find_result.record[0].state|int >= -2
+          - snow_record_find_result.record[0].state|int <= -1
+        msg: change record {{ TICKET_NUMBER }} is not in the required state

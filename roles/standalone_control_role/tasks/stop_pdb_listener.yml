@@ -1,0 +1,31 @@
+---
+##This script stops the PDB listener
+
+- name: copy PDB listener script to {{ server_name }}
+  copy:
+    src: "{{ stop_pdbListener_script }}"
+    dest: "{{ remote_script_directory }}/{{ stop_pdbListener_script }}"
+    mode: "{{script_permission}}"
+    force: yes
+  delegate_to: "{{ server_name }}"
+
+- name: Stopping PDB listener for {{ ORACLE_SID }} on {{ server_name }}
+  shell:
+  vars:
+    #PDB_NAME: "{{ sid_server_dict[ORACLE_SID].pdb }}"
+    PDB_LISTENER: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"    
+  args:
+    executable: /usr/bin/bash
+    cmd: >
+      {{ remote_script_directory }}/{{ stop_pdbListener_script }} stop {{ORACLE_SID}} {{PDB_LISTENER}} 
+      2>&1 | tee {{ remote_output_directory }}/log.{{ stop_pdbListener_script }}.`date +"%Y.%m.%d"`
+  delegate_to: "{{ server_name }}"
+  register: listener_stop_status
+  become: yes
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: sudo
+
+- name: Show stop pdb listener script status for {{ ORACLE_SID }}
+  debug:
+    msg: "{{ listener_stop_status.stdout_lines }}"
+
