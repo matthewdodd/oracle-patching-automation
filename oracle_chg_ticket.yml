@@ -18,7 +18,7 @@
           - state
       register: snow_record_find_result
       environment:
-        https_proxy: 'http://proxy-url:8080'
+        https_proxy: 'http://proxy:8080'
     - debug:
         msg: "{{ snow_record_find_result }}"
     
