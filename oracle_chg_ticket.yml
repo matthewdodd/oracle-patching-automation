@@ -3,13 +3,13 @@
   block:
     - debug:
         - msg: 'The SNOW Ticket # is: {{ TICKET_NUMBER }}'
-        - msg: 'SNOW info is: USER - {{ snow_user }} ; INSTANCE - {{ snow_instance|default("sunlife") }}'
+        - msg: 'SNOW info is: USER - {{ snow_user }} ; INSTANCE - {{ snow_instance|default("<blank>") }}'
 
     - name: Retrieve change record state from ServiceNow
       snow_record_find:
         username: '{{ snow_user }}'
         password: '{{ snow_password }}'
-        instance: '{{ snow_instance|default("sunlife") }}'
+        instance: '{{ snow_instance|default("<blank>") }}'
         table: change_request
         query:
           number: '{{ TICKET_NUMBER }}'
@@ -18,7 +18,7 @@
           - state
       register: snow_record_find_result
       environment:
-        https_proxy: 'http://proxy-mwg-http.glb.ca.sunlife:8080'
+        https_proxy: 'http://proxy:8080'
     - debug:
         msg: "{{ snow_record_find_result }}"
     
