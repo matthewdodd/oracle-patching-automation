@@ -1,0 +1,23 @@
+---
+# prod environment: the inventory dictionary of databases (skeleton). Replace every "<CHANGE_ME>": the job input
+# validation (roles/oracle_common tasks/validate_job.yml) rejects a sid_server_dict that still contains it, so an
+# unedited skeleton stops before any host is touched. A filled-in example: inventory/example/group_vars/all/main.yml.
+#
+# sid_server_dict is keyed by ORACLE_SID (the DATABASE_NAME job input, and every SID of oracle_patch_databases).
+# Keys per database:
+#   dbowner      OS user that owns the database (owner of the ora_pmon_<SID> process); POSIX user name
+#   pdb          PDB name; "" for a non-CDB (the PDB listener steps are then skipped)
+#   dbvip        database VIP pinged before the startup and the shutdown; "" skips the ping
+#   dbListener   database listener name
+#   pdbListener  PDB listener name (keep the key, "" when there is no PDB listener)
+#
+# Every database of one ORACLE_HOME patched together (oracle_patch_databases) needs an entry, all with the same
+# dbowner. The start/stop steps look the SID up in lower case first, then as given, then without case; keep one entry
+# per SID (an upper-case and a lower-case entry for the same SID that differ are refused).
+sid_server_dict:
+  "<CHANGE_ME>":
+    dbowner: "<CHANGE_ME>"
+    pdb: "<CHANGE_ME>"
+    dbvip: "<CHANGE_ME>"
+    dbListener: "<CHANGE_ME>"
+    pdbListener: "<CHANGE_ME>"
