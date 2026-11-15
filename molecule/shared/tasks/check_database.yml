@@ -25,10 +25,14 @@
 
 - name: Decode the stub state of {{ molecule_db.sid }}
   ansible.builtin.set_fact:
+    # {"<file>": [non-empty lines]}. splitlines(), not split('\n'): a Jinja string in a block scalar is not unescaped,
+    # so '\n' there is a literal backslash and n, and nothing would be split.
     __molecule_db_state: >-
-      {{ dict(__molecule_db_slurp.results | map(attribute='item')
-              | zip(__molecule_db_slurp.results | map(attribute='content') | map('b64decode') | map('trim')
-                    | map('split', '\n') | map('reject', 'equalto', '') | map('list'))) }}
+      {%- set ns = namespace(out={}) -%}
+      {%- for r in __molecule_db_slurp.results -%}
+      {%-   set ns.out = ns.out | combine({r.item: (r.content | b64decode).splitlines() | map('trim') | reject('equalto', '') | list}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
 
 - name: Check the database runs with its listeners and every PDB open READ WRITE - {{ molecule_db.sid }}
   ansible.builtin.assert:

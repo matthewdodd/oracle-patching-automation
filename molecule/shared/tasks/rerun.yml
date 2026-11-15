@@ -39,9 +39,10 @@
   ansible.builtin.set_fact:
     molecule_rerun:
       rc: "{{ __molecule_rerun_result.rc }}"
+      # Single backslashes: a Jinja string in a block scalar is not unescaped ('\\s' would match a literal backslash).
       output: >-
-        {{ (__molecule_rerun_result.stdout ~ '\n' ~ __molecule_rerun_result.stderr)
-           | regex_replace('\\s+', ' ') | replace("''", "'") }}
+        {{ [__molecule_rerun_result.stdout, __molecule_rerun_result.stderr] | join(' ')
+           | regex_replace('\s+', ' ') | replace("''", "'") }}
       recap: >-
         {{ __molecule_rerun_result.stdout
            | regex_search('(?m)^' ~ (inventory_hostname | regex_escape)

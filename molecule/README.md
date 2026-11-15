@@ -14,7 +14,9 @@ them exactly as they would see an Oracle instance.
 | `shared-home` | `el9-shared` | AlmaLinux 9.6 | Two running databases on one ORACLE_HOME. A run with only `DATABASE_NAME` in scope is refused by the shared home check before anything is stopped; the run with both in scope (`oracle_patch_databases`) stops both, patches the home once (as the database with Java, so the OJVM patch reaches the home), runs datapatch in each and starts both. Re-runs: already applied; one database alone still refused. |
 
 `shared/prepare.yml` (used by every scenario) installs the role's own prerequisite package list for the release,
-creates the OS users and groups, creates a throw-away CA and adds it to the container's system trust store, builds the
+creates the OS users and groups, creates a throw-away CA (own OpenSSL configuration, so the result is the same with
+OpenSSL 1.1.1 on release 8 and OpenSSL 3 on release 9) and adds it to the container's system trust store
+(`update-ca-trust`; the repository certificate must then verify against that store alone), builds the
 stub patch bundle and its `.sha256` file (`shared/files/build_patch_bundle.bash`) and serves them over https on
 127.0.0.1 inside the container (`shared/files/https_repository.py`). The download therefore runs with the secure
 defaults unchanged: TLS certificate verified, https only, and the required checksum given as

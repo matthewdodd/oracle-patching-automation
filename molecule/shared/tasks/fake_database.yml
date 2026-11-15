@@ -34,9 +34,9 @@
       cdb: "{{ 'YES' if (molecule_db.pdbs | length > 0) else 'NO' }}\n"
       pdbs: "{{ (molecule_db.pdbs | join('\n') ~ '\n') if (molecule_db.pdbs | length > 0) else '' }}"
       pdbs_rw: ""
-      jvm_components: >-
-        {{ 'JServer JAVA Virtual Machine 19.0.0.0.0 VALID\nOracle Database Java Packages 19.0.0.0.0 VALID\n'
-           if molecule_db.java else '' }}
+      # Double-quoted YAML, so "\n" is a newline (in a block scalar it would stay a literal backslash and n).
+      jvm_components: "{{ 'JServer JAVA Virtual Machine 19.0.0.0.0 VALID\nOracle Database Java Packages 19.0.0.0.0 VALID\n'
+        if molecule_db.java else '' }}"
       sqlpatch: ""
       invalid_count: "0\n"
       invalid_base: "0\n"
@@ -70,14 +70,18 @@
     owner: oracle
     group: oinstall
     mode: "0750"
+  # Parents first, each directory listed (file creates missing parents as root, so every level is named here to get
+  # the owner and mode). No regular expressions: a Jinja string in a block scalar is not unescaped, so '\\A' there is a
+  # literal backslash and the listener directories were silently left out (the listener log copy then failed).
   loop: >-
     {{ ['', 'rdbms', 'rdbms/' ~ __molecule_db_name, 'rdbms/' ~ __molecule_db_name ~ '/' ~ molecule_db.sid,
-        'rdbms/' ~ __molecule_db_name ~ '/' ~ molecule_db.sid ~ '/trace', 'tnslsnr', 'tnslsnr/' ~ ansible_facts['nodename']]
-       + (molecule_db.listeners | map('lower') | map('regex_replace', '\\A', 'tnslsnr/' ~ ansible_facts['nodename'] ~ '/') | list)
-       + (molecule_db.listeners | map('lower') | map('regex_replace', '\\A(.*)\\Z', 'tnslsnr/' ~ ansible_facts['nodename'] ~ '/\\1/trace')
-          | list) }}
+        'rdbms/' ~ __molecule_db_name ~ '/' ~ molecule_db.sid ~ '/trace', 'tnslsnr', __molecule_listener_root]
+       + ([__molecule_listener_root ~ '/'] | product(__molecule_listeners) | map('join') | list)
+       + ([__molecule_listener_root ~ '/'] | product(__molecule_listeners, ['/trace']) | map('join') | list) }}
   vars:
     __molecule_db_name: "{{ molecule_db.sid | lower }}"
+    __molecule_listener_root: "tnslsnr/{{ ansible_facts['nodename'] }}"
+    __molecule_listeners: "{{ molecule_db.listeners | map('lower') | list }}"
 
 # diag/rdbms/<db name, lower case>/<SID>/trace/alert_<SID>.log, as Oracle names it.
 - name: Write the alert log of {{ molecule_db.sid }}

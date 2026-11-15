@@ -94,7 +94,10 @@
         creates: "{{ molecule_repository.tls_dir }}/server.crt"
 
     # The playbook's download keeps its secure defaults (TLS certificate verified, https only): the test CA is trusted
-    # the way a site CA would be, through the system trust store.
+    # the way a site CA would be, through the system trust store. Release 8 and 9 use the same ca-trust layout (p11-kit):
+    # an anchor in /etc/pki/ca-trust/source/anchors, then update-ca-trust extract writes the bundles that OpenSSL reads
+    # (/etc/pki/tls/cert.pem -> /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem) for every Python on the host,
+    # including the AppStream python3.11 that runs the modules on release 8.
     - name: Trust the test certificate authority
       ansible.builtin.copy:
         src: "{{ molecule_repository.tls_dir }}/ca.crt"
@@ -107,6 +110,16 @@
 
     - name: Update the system trust store now
       ansible.builtin.meta: flush_handlers
+
+    # The repository certificate must verify against the system trust store alone (no -CAfile), as the download will.
+    # A failure here names the TLS problem directly instead of a repository check that times out.
+    - name: Check the system trust store accepts the repository certificate
+      ansible.builtin.command:
+        argv: [openssl, verify, -purpose, sslserver, "{{ molecule_repository.tls_dir }}/server.crt"]
+      register: molecule_trust_check
+      changed_when: false
+      failed_when: >-
+        molecule_trust_check.rc != 0 or (molecule_trust_check.stdout is not search(': OK$'))
 
     - name: Build the stub patch bundle
       ansible.builtin.command:
