@@ -344,6 +344,27 @@ t_status_starts_database() {
   assert_file_contains "$S/sqlplus.log" "startup;"
 }
 
+# The instance status must come from the INSTANCE_STATUS= row, never from its SQL*Plus column heading
+# 'INSTANCE_STATUS='||STATUS (attempt-1 defect: an open database was reported as down).
+t_status_instance_heading() {
+  echo OPEN >"$S/instance"
+  patch ORCL status "$C/patch"
+  assert_rc 0
+  assert_file_not_contains "$S/sqlplus.log" "startup"
+  assert_file_contains "$C/work/database_state.txt" "INSTANCE_STATUS=OPEN"
+  assert_file_not_contains "$C/work/database_state.txt" "'INSTANCE_STATUS='||STATUS"
+  # Even when a heading does reach the spool file, the anchored pattern skips it.
+  : >"$S/force_heading"
+  rm -f -- "$S/sqlplus.log"
+  patch ORCL status "$C/patch"
+  assert_rc 0
+  assert_file_contains "$C/work/database_state.txt" "'INSTANCE_STATUS='||STATUS"
+  assert_file_not_contains "$S/sqlplus.log" "startup"
+  assert_out_not_contains "is not OPEN"
+  ORA_STATUS_STARTUP=false patch ORCL status "$C/patch"
+  assert_rc 0
+}
+
 t_status_no_startup_toggle() {
   ORA_STATUS_STARTUP=false patch ORCL status "$C/patch"
   assert_rc 1
@@ -657,6 +678,21 @@ t_datapatch_ok() {
   assert_eq "$(state datapatch_runs)" 1 "datapatch runs"
   assert_eq "$(state instance)" DOWN "instance state"
   assert_exists "$C/work/run_datapatch_${DB_ID}_1.txt"
+}
+
+# Every spool parser of the datapatch path (instance status, invalid-object count, patch status rows) must ignore
+# column headings, even when one reaches the spool file despite HEADING OFF.
+t_datapatch_with_headings() {
+  datapatch_ready
+  : >"$S/force_heading"
+  echo 3 >"$S/invalid_count"
+  echo 3 >"$S/invalid_base"
+  patch ORCL datapatch "$C/patch"
+  assert_rc 0
+  assert_out_contains "$DB_ID successfully applied"
+  assert_out_contains "$JVM_ID successfull"
+  assert_eq "$(state instance)" DOWN "instance state"
+  assert_file_contains "$C/work/patch_invalid_objects.txt" "'INVALID_COUNT='||COUNT(*)"
 }
 
 t_datapatch_normal_startup() {

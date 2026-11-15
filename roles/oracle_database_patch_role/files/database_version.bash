@@ -142,8 +142,8 @@ main() {
     err "sqlplus failed"
     return 1
   }
-  version=$(sed -n 's/^.*VERSION=\([0-9][0-9.]*\).*$/\1/p' "$spool" 2>/dev/null | head -n 1)
-  version_full=$(sed -n 's/^.*VERSION_FULL=\([0-9][0-9.]*\).*$/\1/p' "$spool" 2>/dev/null | head -n 1)
+  version=$(sed -n 's/^[[:space:]]*VERSION=\([0-9][0-9.]*\).*$/\1/p' "$spool" 2>/dev/null | head -n 1)
+  version_full=$(sed -n 's/^[[:space:]]*VERSION_FULL=\([0-9][0-9.]*\).*$/\1/p' "$spool" 2>/dev/null | head -n 1)
   if [[ ! $version =~ $RE_VERSION ]]; then
     err "could not read the database version (see $spool)"
     return 1

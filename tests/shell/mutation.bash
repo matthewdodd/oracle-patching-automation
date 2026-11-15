@@ -4,7 +4,8 @@
 #
 # Usage: tests/shell/mutation.bash
 #   For every mutation below, copies the scripts of roles/*/files to a temporary directory, breaks one thing on
-#   purpose (replaces the first occurrence of a literal text) and runs the tests that cover it
+#   purpose (replaces the first occurrence of a literal text; an optional second pair of texts is replaced too,
+#   for defects that need two changes) and runs the tests that cover it
 #   (run.bash <filter>) against the broken copy. A mutation that the tests do not catch ("SURVIVED") makes this
 #   script exit non-zero, and so does a mutation whose text is no longer found in the script.
 
@@ -23,25 +24,39 @@ NL=$'\n'
 P=oracle_database_patch_role/files
 K=standalone_control_role/files
 
-# mutate <role/files/script> <test filter> <literal text> <replacement>
+# replace_first <content> <literal text> <replacement>: sets MUTATED, fails when the text is not found.
+replace_first() {
+  local content=$1 from=$2 to=$3
+  case $content in
+    *"$from"*) ;;
+    *) return 1 ;;
+  esac
+  MUTATED=${content%%"$from"*}$to${content#*"$from"}
+}
+
+# mutate <role/files/script> <test filter> <literal text> <replacement> [<literal text 2> <replacement 2>]
 mutate() {
-  local file=$1 filter=$2 from=$3 to=$4 content pre post
+  local file=$1 filter=$2 from=$3 to=$4 from2=${5:-} to2=${6:-} content
   rm -rf -- "$WORK/roles"
   mkdir -p -- "$WORK/roles"
   cp -R -- "$REPO_DIR/roles/oracle_database_patch_role" "$REPO_DIR/roles/standalone_control_role" "$WORK/roles/"
   content=$(cat -- "$WORK/roles/$file"; printf x)
   content=${content%x}
-  case $content in
-    *"$from"*) ;;
-    *)
+  if ! replace_first "$content" "$from" "$to"; then
+    BROKEN=$((BROKEN + 1))
+    printf 'NOT FOUND %s: %s\n' "$file" "${from%%"$NL"*}"
+    return 0
+  fi
+  content=$MUTATED
+  if [[ -n $from2 ]]; then
+    if ! replace_first "$content" "$from2" "$to2"; then
       BROKEN=$((BROKEN + 1))
-      printf 'NOT FOUND %s: %s\n' "$file" "${from%%"$NL"*}"
+      printf 'NOT FOUND %s: %s\n' "$file" "${from2%%"$NL"*}"
       return 0
-      ;;
-  esac
-  pre=${content%%"$from"*}
-  post=${content#*"$from"}
-  printf '%s' "$pre$to$post" >"$WORK/roles/$file"
+    fi
+    content=$MUTATED
+  fi
+  printf '%s' "$content" >"$WORK/roles/$file"
   if SH_TEST_PATCH_DIR="$WORK/roles/$P" SH_TEST_CTL_DIR="$WORK/roles/$K" \
     bash "$TEST_DIR/run.bash" "$filter" >"$WORK/last.log" 2>&1; then
     SURVIVED=$((SURVIVED + 1))
@@ -95,6 +110,16 @@ mutate "$P/database_patch.bash" t_utlrp 'if [[ ! -f $file ]] || sql_unavailable 
 mutate "$P/database_patch.bash" t_qopiprep "final_mode=\$(printf '%04o' \"\$((8#\$orig_mode | 8#0100))\")" 'final_mode=0744'
 mutate "$P/database_patch.bash" t_qopiprep 'cp -p -- "$file" "$backup" || {' 'true || {'
 mutate "$P/database_patch.bash" t_test_mode '"$jvm_pattern Release Update" "$jvm_min" >/dev/null' '"no such text" "$jvm_min" >/dev/null'
+# instance_status() must never read the SQL*Plus column heading 'INSTANCE_STATUS='||STATUS (the attempt-1 defect:
+# HEADING ON plus an unanchored pattern). HEADING OFF and the anchored pattern each prevent it on their own, so the
+# first mutation restores the attempt-1 code (both defences removed) and the other two remove one defence each.
+mutate "$P/database_patch.bash" t_datapatch_ok \
+  "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 200${NL}SELECT 'INSTANCE_STATUS='" "SELECT 'INSTANCE_STATUS='" \
+  "sed -n 's/^[[:space:]]*INSTANCE_STATUS=\\([A-Z][A-Z]*\\)" "sed -n 's/^.*INSTANCE_STATUS=\\([A-Z]*\\)"
+mutate "$P/database_patch.bash" t_status_instance_heading \
+  "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 200${NL}SELECT 'INSTANCE_STATUS='" "SELECT 'INSTANCE_STATUS='"
+mutate "$P/database_patch.bash" t_status_instance_heading \
+  "sed -n 's/^[[:space:]]*INSTANCE_STATUS=\\([A-Z][A-Z]*\\)" "sed -n 's/^.*INSTANCE_STATUS=\\([A-Z]*\\)"
 
 # database_version.bash
 mutate "$P/database_version.bash" t_version_19c "printf '%s\\n' \"\$version\" >\"\$WORK_DIR/db_version.txt\"" "printf '%s\\n%s\\n' \"\$version\" \"\$version_full\" >\"\$WORK_DIR/db_version.txt\""

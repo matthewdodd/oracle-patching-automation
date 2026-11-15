@@ -7,7 +7,13 @@
 #   invalid_count     number of invalid objects; utlrp sets it to invalid_base unless utlrp_nofix exists
 #   cdb               YES or NO; pdbs_not_rw: PDB names not open READ WRITE (cleared by "all open")
 #   sqlplus_fail, startup_fail, shutdown_fail, pdb_open_fail: failure switches
+#   force_heading     print column headings even after SET HEADING OFF / PAGESIZE 0 (tests that parsers
+#                     never take a heading for a value)
 # Every SQL line is appended to sqlplus.log, utlrp runs are counted in utlrp_runs.
+# Like the real SQL*Plus, query rows are preceded by a column heading and an underline unless HEADING OFF or
+# PAGESIZE 0 was set in the session (the heading of an expression is the expression text, upper-cased and without
+# blanks, e.g. 'INSTANCE_STATUS='||STATUS), so a parser that matches headings is caught by the tests. With
+# FEEDBACK on (the default), a query without rows prints "no rows selected".
 set -u
 S=${STUB_STATE:?STUB_STATE is not set}
 
@@ -21,6 +27,9 @@ read_file() { if [[ -f $1 ]]; then cat -- "$1"; else printf '%s\n' "${2:-}"; fi;
 state=$(read_file "$S/instance" DOWN)
 sid=$(read_file "$S/sid" ORCL)
 spool=""
+heading=on
+feedback=on
+select_list=""
 
 out() {
   printf '%s\n' "$*"
@@ -29,15 +38,53 @@ out() {
   fi
 }
 
-out_file() {
+unavailable() { out "ORA-01034: ORACLE not available"; }
+
+# Prints the heading of the current query once, before its first row.
+header() {
+  local text
+  [[ -n $select_list ]] || return 0
+  text=$select_list
+  select_list=""
+  [[ $heading == on || -f $S/force_heading ]] || return 0
+  out "$text"
+  out "$(printf '%s' "$text" | tr -c '\n' '-')"
+}
+
+row() {
+  header
+  out "$@"
+}
+
+rows_file() {
   local line
-  [[ -f $1 ]] || return 0
+  if [[ ! -s $1 ]]; then
+    no_rows
+    return 0
+  fi
   while IFS= read -r line || [[ -n $line ]]; do
-    out "$line"
+    row "$line"
   done <"$1"
 }
 
-unavailable() { out "ORA-01034: ORACLE not available"; }
+no_rows() {
+  select_list=""
+  if [[ $feedback == on ]]; then out "no rows selected"; fi
+}
+
+# set heading off|on, set pagesize N, set feedback off|on (several settings may share one SET command).
+apply_set() {
+  local -a words
+  local i
+  read -r -a words <<<"$1"
+  for ((i = 1; i < ${#words[@]}; i++)); do
+    case ${words[i]} in
+      heading | head | hea) [[ ${words[i + 1]:-} == off ]] && heading=off || heading=on ;;
+      pagesize | pages) [[ ${words[i + 1]:-} == 0 ]] && heading=off ;;
+      feedback | feed) [[ ${words[i + 1]:-} == off ]] && feedback=off || feedback=on ;;
+    esac
+  done
+}
 
 increment() {
   local n
@@ -49,6 +96,13 @@ while IFS= read -r line || [[ -n $line ]]; do
   printf '%s\n' "$line" >>"$S/sqlplus.log"
   lc=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
   case $lc in
+    select\ *)
+      select_list=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*[Ss][Ee][Ll][Ee][Cc][Tt][[:space:]]*//' \
+        -e 's/[[:space:]][Ff][Rr][Oo][Mm][[:space:]].*$//' -e 's/;[[:space:]]*$//' | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+      ;;
+  esac
+  case $lc in
+    set\ *) apply_set "$lc" ;;
     "connect / as sysdba")
       if [[ $state == DOWN ]]; then out "Connected to an idle instance."; else out "Connected."; fi
       ;;
@@ -104,39 +158,43 @@ while IFS= read -r line || [[ -n $line ]]; do
       if [[ $state == DOWN ]]; then
         unavailable
       elif [[ $lc == *"instance_status="* ]]; then
-        out "INSTANCE_STATUS=$state"
+        row "INSTANCE_STATUS=$state"
       elif [[ $lc == *"version_full="* ]]; then
         if [[ -f $S/version_full ]]; then
-          out "VERSION_FULL=$(cat -- "$S/version_full")"
+          row "VERSION_FULL=$(cat -- "$S/version_full")"
         else
           out 'ORA-00904: "VERSION_FULL": invalid identifier'
         fi
       elif [[ $lc == *"version="* ]]; then
-        out "VERSION=$(read_file "$S/version" 19.0.0.0.0)"
+        row "VERSION=$(read_file "$S/version" 19.0.0.0.0)"
       else
-        out "$sid $state ACTIVE"
+        row "$sid $state ACTIVE"
       fi
       ;;
     *"from v\$database"*)
-      if [[ $state == DOWN ]]; then unavailable; else out "CDB=$(read_file "$S/cdb" NO)"; fi
+      if [[ $state == DOWN ]]; then unavailable; else row "CDB=$(read_file "$S/cdb" NO)"; fi
       ;;
     *"from v\$pdbs"*)
       if [[ $state == DOWN ]]; then
         unavailable
-      elif [[ -f $S/pdbs_not_rw ]]; then
+      elif [[ -s $S/pdbs_not_rw ]]; then
         while IFS= read -r pdb; do
-          [[ -n $pdb ]] && out "PDB_NOT_RW=$pdb" && out "PDB_STATE=$pdb"
+          if [[ -n $pdb ]]; then
+            if [[ $lc == *"pdb_not_rw="* ]]; then row "PDB_NOT_RW=$pdb"; else row "PDB_STATE=$pdb"; fi
+          fi
         done <"$S/pdbs_not_rw"
+      else
+        no_rows
       fi
       ;;
     *"from dba_registry_sqlpatch"*)
-      if [[ $state == DOWN ]]; then unavailable; else out_file "$S/sqlpatch"; fi
+      if [[ $state == DOWN ]]; then unavailable; else rows_file "$S/sqlpatch"; fi
       ;;
     *"from dba_registry "*)
-      if [[ $state == DOWN ]]; then unavailable; else out_file "$S/jvm_components"; fi
+      if [[ $state == DOWN ]]; then unavailable; else rows_file "$S/jvm_components"; fi
       ;;
     *"invalid_count="*)
-      if [[ $state == DOWN ]]; then unavailable; else out "INVALID_COUNT=$(read_file "$S/invalid_count" 0)"; fi
+      if [[ $state == DOWN ]]; then unavailable; else row "INVALID_COUNT=$(read_file "$S/invalid_count" 0)"; fi
       ;;
     exit | quit) break ;;
   esac

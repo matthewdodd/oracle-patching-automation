@@ -104,12 +104,12 @@ sysdba() {
 pdbs_not_read_write() {
   printf '%s\n' "SET HEADING OFF FEEDBACK OFF PAGESIZE 0" \
     "select 'PDB_NOT_RW=' || name from v\$pdbs where name not like 'PDB%SEED' and open_mode != 'READ WRITE';" |
-    sysdba | sed -n 's/^.*PDB_NOT_RW=//p'
+    sysdba | sed -n 's/^[[:space:]]*PDB_NOT_RW=\([A-Za-z0-9_$#][A-Za-z0-9_$#]*\).*$/\1/p'
 }
 
 is_cdb() {
   printf '%s\n' "SET HEADING OFF FEEDBACK OFF PAGESIZE 0" "select 'CDB=' || cdb from v\$database;" |
-    sysdba | grep -q 'CDB=YES'
+    sysdba | grep -q '^[[:space:]]*CDB=YES'
 }
 
 start_database() {

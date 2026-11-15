@@ -287,17 +287,20 @@ check_database_state() {
   run_sql <<EOF
 SPOOL ${WORK_DIR}/database_state.txt
 SELECT INSTANCE_NAME, STATUS, DATABASE_STATUS FROM V\$INSTANCE;
+SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 200
 SELECT 'INSTANCE_STATUS=' || STATUS FROM V\$INSTANCE;
 SPOOL OFF
 EOF
 }
 
 # Prints the instance status (OPEN, MOUNTED, STARTED) or nothing when the instance is down.
+# The marker query runs with HEADING OFF, and the pattern is anchored and needs at least one letter, so a
+# column heading such as 'INSTANCE_STATUS='||STATUS (SQL*Plus default HEADING ON) can never match.
 instance_status() {
   local file="${WORK_DIR}/database_state.txt"
   check_database_state >/dev/null || return 1
   [[ -f $file ]] || return 1
-  sed -n 's/^.*INSTANCE_STATUS=\([A-Z]*\).*$/\1/p' "$file" | head -n 1
+  sed -n 's/^[[:space:]]*INSTANCE_STATUS=\([A-Z][A-Z]*\).*$/\1/p' "$file" | head -n 1
 }
 
 check_db_jvm_components() {
@@ -322,7 +325,7 @@ SPOOL ${file}
 SELECT 'INVALID_COUNT=' || count(*) FROM dba_objects WHERE status = 'INVALID';
 SPOOL OFF
 EOF
-  n=$(sed -n 's/^.*INVALID_COUNT=\([0-9][0-9]*\).*$/\1/p' "$file" 2>/dev/null | head -n 1)
+  n=$(sed -n 's/^[[:space:]]*INVALID_COUNT=\([0-9][0-9]*\).*$/\1/p' "$file" 2>/dev/null | head -n 1)
   if [[ ! $n =~ ^[0-9]+$ ]]; then
     err "could not read the number of invalid objects (see $file)"
     return 1

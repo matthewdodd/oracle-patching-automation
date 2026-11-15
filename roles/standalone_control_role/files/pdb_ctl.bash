@@ -96,7 +96,7 @@ pdbs_not_in_mode() {
   fi
   printf '%s\n' "SET HEADING OFF FEEDBACK OFF PAGESIZE 0" \
     "select 'PDB_STATE=' || name from v\$pdbs where ${filter} and open_mode != '${mode}';" |
-    sqlplus -S / as sysdba | sed -n 's/^.*PDB_STATE=//p'
+    sqlplus -S / as sysdba | sed -n 's/^[[:space:]]*PDB_STATE=\([A-Za-z0-9_$#][A-Za-z0-9_$#]*\).*$/\1/p'
 }
 
 open_pdb() {
