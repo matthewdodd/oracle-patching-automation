@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Test stub of OPatch, installed as $ORACLE_HOME/OPatch/opatch. Answers from STUB_STATE:
+#   prereq_fail_<id>, apply_fail_<id>: failure switches; apply_warn: "OPatch completed with warnings."
+#   opatch_version_fail: "opatch version" fails (a broken OPatch copy)
+# Applied patch ids are appended to home_applied, every call to opatch.log.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+here=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
+printf '%s %s\n' "$here" "$*" >>"$S/opatch.log"
+
+case ${1:-} in
+  version)
+    if [[ -f $here/broken ]]; then
+      echo "OPatch failed: broken copy"
+      exit 1
+    fi
+    echo "OPatch Version: $(sed -n 's/^OPATCH_VERSION://p' "$here/version.txt")"
+    echo ""
+    echo "OPatch succeeded."
+    ;;
+  prereq)
+    id=$(basename -- "$(pwd -P)")
+    echo "Invoking prereq \"checkconflictagainstohwithdetail\""
+    if [[ -f $S/prereq_fail_$id ]]; then
+      echo "Prereq \"checkConflictAgainstOHWithDetail\" failed."
+      echo "OPatch failed with error code 73"
+      exit 73
+    fi
+    echo "Prereq \"checkConflictAgainstOHWithDetail\" passed."
+    echo ""
+    echo "OPatch succeeded."
+    ;;
+  apply)
+    folder=${3:-}
+    id=$(basename -- "$folder")
+    echo "Applying interim patch '$id' to OH"
+    if [[ -f $S/apply_fail_$id ]]; then
+      echo "OPatch failed with error code 73"
+      exit 73
+    fi
+    printf '%s\n' "$id" >>"$S/home_applied"
+    if [[ -f $S/apply_warn ]]; then
+      echo "OPatch completed with warnings."
+    else
+      echo "OPatch succeeded."
+    fi
+    ;;
+  *)
+    echo "opatch stub: unsupported command $*"
+    exit 1
+    ;;
+esac

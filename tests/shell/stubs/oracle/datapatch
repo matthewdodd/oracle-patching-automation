@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Test stub of datapatch, installed as $ORACLE_HOME/OPatch/datapatch. For every patch id in home_applied it
+# adds a row at the top of sqlpatch (newest first, like "order by action_time desc"). Switches in STUB_STATE:
+#   jvm_id + jvm_error_runs N: the first N runs record the OJVM patch WITH ERRORS
+#   db_error_id: that patch is always recorded WITH ERRORS
+#   datapatch_invalid_delta: added to invalid_count on every run
+# Runs are counted in datapatch_runs.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+read_file() { if [[ -f $1 ]]; then cat -- "$1"; else printf '%s\n' "${2:-}"; fi; }
+
+runs=$(read_file "$S/datapatch_runs" 0)
+runs=$((runs + 1))
+printf '%s\n' "$runs" >"$S/datapatch_runs"
+echo "SQL Patching tool version 19.27.0.0.0 Production"
+
+jvm_id=$(read_file "$S/jvm_id" "")
+jvm_error_runs=$(read_file "$S/jvm_error_runs" 0)
+db_error_id=$(read_file "$S/db_error_id" "")
+new_rows=""
+if [[ -f $S/home_applied ]]; then
+  while IFS= read -r id; do
+    [[ -n $id ]] || continue
+    status=SUCCESS
+    if [[ $id == "$jvm_id" && $runs -le $jvm_error_runs ]] || [[ $id == "$db_error_id" ]]; then
+      status="WITH ERRORS"
+    fi
+    new_rows="${new_rows}  ${id} ${status} ${runs} APPLY 14-NOV-26 10.00.0${runs} Patch ${id}"$'\n'
+    echo "Patch $id apply: $status"
+  done <"$S/home_applied"
+fi
+{
+  printf '%s' "$new_rows"
+  read_file "$S/sqlpatch" ""
+} >"$S/sqlpatch.new"
+mv -- "$S/sqlpatch.new" "$S/sqlpatch"
+
+delta=$(read_file "$S/datapatch_invalid_delta" 0)
+count=$(read_file "$S/invalid_count" 0)
+printf '%s\n' "$((count + delta))" >"$S/invalid_count"
+echo "SQL Patching tool complete"
+exit 0

@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Test stub of SQL*Plus. Reads SQL from stdin and answers from the files in STUB_STATE:
+#   instance          DOWN, OPEN or MOUNTED (updated by startup and shutdown)
+#   sid               SID printed in v$instance rows
+#   version           v$instance.version; version_full: v$instance.version_full (missing file: ORA-00904)
+#   sqlpatch          rows of dba_registry_sqlpatch; jvm_components: rows of dba_registry (Java)
+#   invalid_count     number of invalid objects; utlrp sets it to invalid_base unless utlrp_nofix exists
+#   cdb               YES or NO; pdbs_not_rw: PDB names not open READ WRITE (cleared by "all open")
+#   sqlplus_fail, startup_fail, shutdown_fail, pdb_open_fail: failure switches
+# Every SQL line is appended to sqlplus.log, utlrp runs are counted in utlrp_runs.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+
+if [[ -f $S/sqlplus_fail ]]; then
+  echo "sqlplus stub: forced failure"
+  exit 1
+fi
+
+read_file() { if [[ -f $1 ]]; then cat -- "$1"; else printf '%s\n' "${2:-}"; fi; }
+
+state=$(read_file "$S/instance" DOWN)
+sid=$(read_file "$S/sid" ORCL)
+spool=""
+
+out() {
+  printf '%s\n' "$*"
+  if [[ -n $spool ]]; then
+    printf '%s\n' "$*" >>"$spool"
+  fi
+}
+
+out_file() {
+  local line
+  [[ -f $1 ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    out "$line"
+  done <"$1"
+}
+
+unavailable() { out "ORA-01034: ORACLE not available"; }
+
+increment() {
+  local n
+  n=$(read_file "$1" 0)
+  printf '%s\n' "$((n + 1))" >"$1"
+}
+
+while IFS= read -r line || [[ -n $line ]]; do
+  printf '%s\n' "$line" >>"$S/sqlplus.log"
+  lc=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  case $lc in
+    "connect / as sysdba")
+      if [[ $state == DOWN ]]; then out "Connected to an idle instance."; else out "Connected."; fi
+      ;;
+    "spool off"*) spool="" ;;
+    "spool "*)
+      spool=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*[Ss][Pp][Oo][Oo][Ll][[:space:]]*//' -e 's/[[:space:]]*$//')
+      : >"$spool"
+      ;;
+    startup*)
+      if [[ $state != DOWN ]]; then
+        out "ORA-01081: cannot start already-running ORACLE - shut it down first"
+      elif [[ -f $S/startup_fail ]]; then
+        out "ORA-00205: error in identifying control file"
+      else
+        state=OPEN
+        case $lc in
+          *upgrade*) echo upgrade >"$S/open_mode" ;;
+          *) echo normal >"$S/open_mode" ;;
+        esac
+        out "ORACLE instance started."
+        out "Database opened."
+      fi
+      ;;
+    shutdown*)
+      if [[ $state == DOWN ]]; then
+        out "ORA-01034: ORACLE not available"
+      elif [[ -f $S/shutdown_fail ]]; then
+        out "ORA-01013: user requested cancel of current operation"
+      else
+        state=DOWN
+        out "Database closed."
+        out "ORACLE instance shut down."
+      fi
+      ;;
+    *"alter pluggable database all open"*)
+      if [[ $state == DOWN ]]; then unavailable; elif [[ ! -f $S/pdb_open_fail ]]; then : >"$S/pdbs_not_rw"; fi
+      ;;
+    *"alter pluggable database"*)
+      [[ $state == DOWN ]] && unavailable
+      ;;
+    *"utlrp.sql"*)
+      if [[ $state == DOWN ]]; then
+        unavailable
+      else
+        increment "$S/utlrp_runs"
+        if [[ ! -f $S/utlrp_nofix ]]; then
+          read_file "$S/invalid_base" 0 >"$S/invalid_count"
+        fi
+        out "PL/SQL procedure successfully completed."
+      fi
+      ;;
+    *"from v\$instance"*)
+      if [[ $state == DOWN ]]; then
+        unavailable
+      elif [[ $lc == *"instance_status="* ]]; then
+        out "INSTANCE_STATUS=$state"
+      elif [[ $lc == *"version_full="* ]]; then
+        if [[ -f $S/version_full ]]; then
+          out "VERSION_FULL=$(cat -- "$S/version_full")"
+        else
+          out 'ORA-00904: "VERSION_FULL": invalid identifier'
+        fi
+      elif [[ $lc == *"version="* ]]; then
+        out "VERSION=$(read_file "$S/version" 19.0.0.0.0)"
+      else
+        out "$sid $state ACTIVE"
+      fi
+      ;;
+    *"from v\$database"*)
+      if [[ $state == DOWN ]]; then unavailable; else out "CDB=$(read_file "$S/cdb" NO)"; fi
+      ;;
+    *"from v\$pdbs"*)
+      if [[ $state == DOWN ]]; then
+        unavailable
+      elif [[ -f $S/pdbs_not_rw ]]; then
+        while IFS= read -r pdb; do
+          [[ -n $pdb ]] && out "PDB_NOT_RW=$pdb" && out "PDB_STATE=$pdb"
+        done <"$S/pdbs_not_rw"
+      fi
+      ;;
+    *"from dba_registry_sqlpatch"*)
+      if [[ $state == DOWN ]]; then unavailable; else out_file "$S/sqlpatch"; fi
+      ;;
+    *"from dba_registry "*)
+      if [[ $state == DOWN ]]; then unavailable; else out_file "$S/jvm_components"; fi
+      ;;
+    *"invalid_count="*)
+      if [[ $state == DOWN ]]; then unavailable; else out "INVALID_COUNT=$(read_file "$S/invalid_count" 0)"; fi
+      ;;
+    exit | quit) break ;;
+  esac
+done
+
+printf '%s\n' "$state" >"$S/instance"
+exit 0

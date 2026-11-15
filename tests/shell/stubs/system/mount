@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Test stub of mount: one line per mount point listed in STUB_STATE/mounts.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+[[ -f $S/mounts ]] || exit 0
+while IFS= read -r mp; do
+  [[ -n $mp ]] && printf '/dev/stub on %s type xfs (rw)\n' "$mp"
+done <"$S/mounts"
