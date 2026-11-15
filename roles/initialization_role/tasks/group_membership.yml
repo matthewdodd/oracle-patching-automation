@@ -6,7 +6,6 @@
 
 - name: Check if OS type is allowed
   shell:
-  args:
     executable: /usr/bin/bash
     cmd: |
       ostype=`uname`
@@ -22,13 +21,12 @@
 
 - name: Add member to group
   shell:
-  args:
     executable: /usr/bin/bash
     cmd: |
       membername={{memberlist}}
       ostype=`uname`
       grep {{groupname}}: /etc/group | grep $membername
-        
+
       if [ $? -eq 0 ]
       then
         echo "Member $membername is already in the {{groupname}} group."

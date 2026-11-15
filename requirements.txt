@@ -1,0 +1,7 @@
+# Controller / CI tooling. Install with:  pip install -r requirements.txt
+# ansible-core 2.22 requires Python >= 3.13 on the controller (developed and tested on 3.15).
+# Managed hosts need Python >= 3.9 (RHEL 8 needs an AppStream python3.9+; EL7 is not supported).
+ansible-core==2.22.0
+ansible-lint==26.11.0
+yamllint==1.38.0
+shellcheck-py==0.11.0.1

@@ -1,27 +1,38 @@
 ---
 - name: Add server names passed in to the Playbook
   hosts: all,localhost
-  gather_facts: no 
+  gather_facts: false
   run_once: true
-  tasks: 
-    - name: Add server names to the Ansible inventory 
-      when: target is defined 
-      add_host: 
-        name: '{{ item }}' 
-        groups: '{{ ansible_inventory_groups|default(omit) }}' 
-      with_items: 
-        - "{{ target.replace(',','\n').split() }}" 
-      changed_when: false 
+  tasks:
+    - name: Check that target was supplied
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target | string | trim | length > 0
+        fail_msg: >-
+          target is required: pass the comma or space separated host list, e.g. -e target=dbhost01.example.com
+          (AAP: the 'target' survey question / extra var).
+        quiet: true
+      any_errors_fatal: true
+
+    - name: Add server names to the Ansible inventory
+      when: target is defined
+      add_host:
+        name: '{{ item }}'
+        groups: '{{ ansible_inventory_groups|default(omit) }}'
+      with_items:
+        - "{{ target.replace(',','\n').split() }}"
+      changed_when: false
 
 - name: Full Database Patching Playbook - Pre-Tasks
   hosts: localhost
-  gather_facts: no
-  pre_tasks: 
+  gather_facts: false
+  pre_tasks:
     - name: Send Starting Notification
       include_tasks: notification.yml
       vars:
-        - call: "start"
-        - summary_state: "patching"
+        call: "start"
+        summary_state: "patching"
 
     - name: Validate Inventory
       block:
@@ -34,14 +45,15 @@
         - name: Send Notification
           include_tasks: notification.yml
           vars:
-            - call: "fail"
-            - summary_state: "patching"
+            call: "fail"
+            summary_state: "patching"
         - name: Check if Fail
-          fail: 
+          fail:
             msg: "Fail"
 
 - name: Full Database Patching Playbook - PREREQS ONLY
-  hosts: "{{ target }}"
+  # The default only keeps the play parseable when target is missing; play 1 fails first with a clear message.
+  hosts: "{{ target | default('') }}"
   tasks:
     - name: Initialize
       block:
@@ -52,10 +64,10 @@
         - name: Checking Initialize Playbook
           include_tasks: notification.yml
           vars:
-            - call: "fail"
-            - summary_state: "patching"
+            call: "fail"
+            summary_state: "patching"
         - name: Check if Fail
-          fail: 
+          fail:
             msg: "Fail"
 
     - name: Run Prereq
@@ -76,10 +88,10 @@
         - name: Checking Run Prereq
           include_tasks: notification.yml
           vars:
-            - call: "{{ notification_call }}"
-            - summary_state: "patching"
+            call: "{{ notification_call }}"
+            summary_state: "patching"
         - name: Check if Fail
-          fail: 
+          fail:
             msg: "Fail"
 
   post_tasks:
@@ -93,11 +105,11 @@
         - name: Checking Remove old patching files
           include_tasks: notification.yml
           vars:
-            - call: "fail"
-            - summary_state: "patching"
+            call: "fail"
+            summary_state: "patching"
 
     - name: Send Success Notification
       include_tasks: notification.yml
       vars:
-        - call: "success"
-        - summary_state: "patching"
+        call: "success"
+        summary_state: "patching"

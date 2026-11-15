@@ -1,5 +1,5 @@
 ---
-###This script starts the database
+### This script starts the database
 
 - name: start oracle database on {{ server_name }}
   shell: >
@@ -8,7 +8,7 @@
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
   register: db_start_status
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: sudo
   failed_when: db_start_status.rc != 4 and db_start_status.rc != 0

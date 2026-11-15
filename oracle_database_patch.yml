@@ -1,27 +1,38 @@
 ---
 - name: Add server names passed in to the Playbook
   hosts: all,localhost
-  gather_facts: no 
+  gather_facts: false
   run_once: true
-  tasks: 
-    - name: Add server names to the Ansible inventory 
-      when: target is defined 
-      add_host: 
-        name: '{{ item }}' 
-        groups: '{{ ansible_inventory_groups|default(omit) }}' 
-      with_items: 
-        - "{{ target.replace(',','\n').split() }}" 
-      changed_when: false 
+  tasks:
+    - name: Check that target was supplied
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target | string | trim | length > 0
+        fail_msg: >-
+          target is required: pass the comma or space separated host list, e.g. -e target=dbhost01.example.com
+          (AAP: the 'target' survey question / extra var).
+        quiet: true
+      any_errors_fatal: true
+
+    - name: Add server names to the Ansible inventory
+      when: target is defined
+      add_host:
+        name: '{{ item }}'
+        groups: '{{ ansible_inventory_groups|default(omit) }}'
+      with_items:
+        - "{{ target.replace(',','\n').split() }}"
+      changed_when: false
 
 - name: Full Database Patching Playbook - Pre-Tasks
   hosts: localhost
-  gather_facts: no
-  pre_tasks: 
+  gather_facts: false
+  pre_tasks:
     - name: Send Starting Notification
       include_tasks: notification.yml
       vars:
-        - call: "start"
-        - summary_state: "patching"
+        call: "start"
+        summary_state: "patching"
 
     - name: Validate Inventory
       block:
@@ -34,10 +45,10 @@
         - name: Send Notification
           include_tasks: notification.yml
           vars:
-            - call: "fail"
-            - summary_state: "patching"
+            call: "fail"
+            summary_state: "patching"
         - name: Check if Fail
-          fail: 
+          fail:
             msg: "Fail"
 
     - name: Validate Change Ticket
@@ -48,16 +59,17 @@
         - name: Checking Change Ticket Validation
           include_tasks: notification.yml
           vars:
-            - call: "fail"
-            - summary_state: "patching"
+            call: "fail"
+            summary_state: "patching"
         - name: Check if Fail
-          fail: 
+          fail:
             msg: "Fail"
       when:
         - override_chg == "false"
 
 - name: Full Database Patching Playbook - Tasks
-  hosts: "{{ target }}"
+  # The default only keeps the play parseable when target is missing; play 1 fails first with a clear message.
+  hosts: "{{ target | default('') }}"
   tasks:
     - name: Initialize
       block:
@@ -68,14 +80,14 @@
         - name: init
           delegate_to: 127.0.0.1
           block:
-          - name: Checking Initialize Playbook
-            include_tasks: notification.yml
-            vars:
-              - call: "fail"
-              - summary_state: "patching"
-          - name: Check if Fail
-            fail: 
-              msg: "Fail"
+            - name: Checking Initialize Playbook
+              include_tasks: notification.yml
+              vars:
+                call: "fail"
+                summary_state: "patching"
+            - name: Check if Fail
+              fail:
+                msg: "Fail"
 
     - name: Run Prereq
       block:
@@ -86,33 +98,32 @@
       rescue:
         - name: prereq1
           block:
-          - set_fact:
-              notification_call: "{{ 'unneeded' if hostvars[item].check_if == 'two' else 'fail' }}"
-            with_items:
-              - "{{ target }}"
-          - name: Remove old patching files
-            include_role:
-              name: oracle_database_patch_role
-              tasks_from: clean_files_from_server
+            - set_fact:
+                notification_call: "{{ 'unneeded' if hostvars[item].check_if == 'two' else 'fail' }}"
+              with_items:
+                - "{{ target }}"
+            - name: Remove old patching files
+              include_role:
+                name: oracle_database_patch_role
+                tasks_from: clean_files_from_server
         - name: prereq2
           delegate_to: 127.0.0.1
           block:
-          - name: Checking Run Prereq
-            include_tasks: notification.yml
-            vars:
-              - call: "{{ notification_call }}"
-              - summary_state: "patching"
-          - name: Check if Fail
-            fail: 
-              msg: "Fail"
+            - name: Checking Run Prereq
+              include_tasks: notification.yml
+              vars:
+                call: "{{ notification_call }}"
+                summary_state: "patching"
+            - name: Check if Fail
+              fail:
+                msg: "Fail"
 
     - name: Shutdown the Oracle Database
       block:
         - name: Shutdown the Oracle Database
           include_tasks: oracle_control_sid.yml
           vars:
-            - control: "shutdown"
-            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+            control: "shutdown"
       rescue:
         - name: Cleanup Shutdown if Fail
           include_role:
@@ -124,10 +135,10 @@
             - name: Notify for failure
               include_tasks: notification.yml
               vars:
-                - call: "fail"
-                - summary_state: "patching"
+                call: "fail"
+                summary_state: "patching"
             - name: Check if Fail
-              fail: 
+              fail:
                 msg: "Fail"
 
     - name: Patch the Oracle Database
@@ -142,10 +153,10 @@
             - name: Notify for failure
               include_tasks: notification.yml
               vars:
-                - call: "fail"
-                - summary_state: "patching"
+                call: "fail"
+                summary_state: "patching"
             - name: Check if Fail
-              fail: 
+              fail:
                 msg: "Fail"
 
     - name: Startup the Oracle Database
@@ -153,8 +164,7 @@
         - name: Startup the Oracle Database
           include_tasks: oracle_control_sid.yml
           vars:
-            - control: "startup"
-            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+            control: "startup"
       rescue:
         - name: Cleanup Startup if Fail
           include_role:
@@ -166,15 +176,15 @@
             - name: Notify for failure
               include_tasks: notification.yml
               vars:
-                - call: "fail"
-                - summary_state: "patching"
+                call: "fail"
+                summary_state: "patching"
             - name: Check if Fail
-              fail: 
+              fail:
                 msg: "Fail"
 
   post_tasks:
     - name: Remove old patching files
-      ignore_errors: yes
+      ignore_errors: true
       import_role:
         name: oracle_database_patch_role
         tasks_from: clean_files_from_server
@@ -185,5 +195,5 @@
         - name: Send Success Notification
           include_tasks: notification.yml
           vars:
-            - call: "success"
-            - summary_state: "patching"
+            call: "success"
+            summary_state: "patching"

@@ -1,12 +1,12 @@
 ---
-##This script starts the PDB listener
+## This script starts the PDB listener
 
 - name: copy listener start script to {{ server_name }}
   copy:
     src: "{{ start_listener_script }}"
     dest: "{{ remote_script_directory }}/{{ start_listener_script }}"
     mode: "{{script_permission}}"
-    force: yes
+    force: true
   delegate_to: "{{ server_name }}"
 
 - name: start listener {{ ORACLE_SID }} on {{ server_name }}
@@ -18,7 +18,7 @@
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
   register: listener_start_status
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: sudo
   failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0

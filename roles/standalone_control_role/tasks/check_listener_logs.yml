@@ -1,5 +1,5 @@
 ---
-##This script copies the check_listener_logs.bash script to server and checks the listener logs for errors and warnings.
+## This script copies the check_listener_logs.bash script to server and checks the listener logs for errors and warnings.
 ##
 
 - name: copy check_listener_logs script to {{ server_name }}
@@ -7,7 +7,7 @@
     src: "{{ check_listenerLogs_script }}"
     dest: "{{ remote_script_directory }}/{{ check_listenerLogs_script }}"
     mode: "{{script_permission}}"
-    force: yes
+    force: true
   delegate_to: "{{ server_name }}"
 
 
@@ -15,7 +15,7 @@
   vars:
     listenerA: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
     listenerB: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"
-  shell: > 
+  shell: >
     {{remote_script_directory}}/{{check_listenerLogs_script}}
     {{ORACLE_SID}} {{listenerA}} {{listenerB}}
     &> >(tee {{ remote_output_directory }}/log.{{ check_listenerLogs_script }}.`date +"%Y.%m.%d"`)
@@ -23,7 +23,7 @@
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
   register: check_listenerLogs_status
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: sudo
   failed_when: check_listenerLogs_status.rc != 4 and check_listenerLogs_status.rc != 0
@@ -32,4 +32,4 @@
   debug:
     msg: "{{ check_listenerLogs_status.stdout_lines }}"
   failed_when: check_listenerLogs_status.rc == 4
-  ignore_errors: yes
+  ignore_errors: true

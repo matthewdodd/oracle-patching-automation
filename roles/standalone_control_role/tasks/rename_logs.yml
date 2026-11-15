@@ -1,13 +1,12 @@
 ---
-##This script renames existing alert log and listener logs so that new logs will be created.
+## This script renames existing alert log and listener logs so that new logs will be created.
 
 - name: copy rename_logs script to {{ server_name }}
-  vars:
   copy:
     src: "{{ rename_logs_script }}"
     dest: "{{ remote_script_directory }}/{{ rename_logs_script }}"
     mode: "{{script_permission}}"
-    force: yes
+    force: true
   delegate_to: "{{ server_name }}"
 
 - name: Rename alert log for {{ ORACLE_SID }}
@@ -22,7 +21,7 @@
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
   register: rename_logs_status
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: sudo
   failed_when: rename_logs_status.rc != 4 and rename_logs_status.rc != 0

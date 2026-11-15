@@ -1,0 +1,52 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+          cache: pip
+
+      - name: Install tooling
+        run: |
+          pip install -r requirements.txt
+          ansible-galaxy collection install -r collections/requirements.yml
+
+      - name: yamllint
+        if: always()
+        run: yamllint .
+
+      - name: shellcheck
+        if: always()
+        # Informational until the shell-script unit (SH) makes the scripts shellcheck-clean; that unit
+        # removes continue-on-error so this step becomes blocking.
+        continue-on-error: true
+        run: shellcheck roles/*/files/*.bash
+
+      - name: ansible-playbook --syntax-check (full patch)
+        if: always()
+        # `target` is required to template the target plays' `hosts:`; any value works here.
+        run: ansible-playbook -i inventory/example/hosts.yml --syntax-check oracle_database_patch.yml -e target=dbhost01.example.com
+
+      - name: ansible-playbook --syntax-check (prereq only)
+        if: always()
+        run: ansible-playbook -i inventory/example/hosts.yml --syntax-check oracle_database_patch_prereq.yml -e target=dbhost01.example.com
+
+      - name: ansible-lint
+        if: always()
+        run: ansible-lint

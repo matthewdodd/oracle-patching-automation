@@ -1,18 +1,22 @@
 ---
-#tasks file for Oracle Database Patching
+# tasks file for Oracle Database Patching
 
 - set_fact:
     ORACLE_SID: "{{ DATABASE_NAME }}"
-    script_permission: 0777
+    script_permission: "0777"
     server_name: "{{ target }}"
 
 - name: Copy Scripts to {{ remote_script_directory }}
   block:
     - name: Create roles/oracle_database_patch_role/files if not exist
-      copy: src=roles/oracle_database_patch_role/files/ dest={{ remote_script_directory }}/oracle_database_patch_role mode=777
+      copy:
+        # role_path-based so the source does not depend on the playbook directory.
+        src: "{{ role_path }}/files/"
+        dest: "{{ remote_script_directory }}/oracle_database_patch_role"
+        mode: "0777"
 
 - name: Oracle Database Patching
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   block:
     - name: Apply Patch for {{ DATABASE_NAME }}

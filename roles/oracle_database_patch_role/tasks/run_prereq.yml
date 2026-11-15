@@ -1,13 +1,13 @@
 ---
 - name: Run prereq
-  become: yes
+  become: true
   become_user: "{{sid_server_dict[ORACLE_SID].dbowner}}"
   block:
     - set_fact:
         check_if: "one"
 
     - name: Download and copy patch to server
-      include: copy_files_to_server.yml
+      ansible.builtin.include_tasks: copy_files_to_server.yml
       vars:
         artf_file_name: "{{ patch_file_name }}"
         temp_dir: "{{ patch_folder_name }}"

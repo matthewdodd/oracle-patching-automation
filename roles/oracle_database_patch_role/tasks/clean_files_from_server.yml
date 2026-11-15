@@ -1,6 +1,6 @@
 ---
 - name: Cleanup patching files
-  become: yes
+  become: true
   become_user: "{{ b_user }}"
   file:
     state: absent
@@ -14,7 +14,7 @@
         state: absent
   rescue:
     - name: Remove {{ remote_script_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
-      become: yes
+      become: true
       become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
       ansible.builtin.file:
         path: "{{ remote_script_directory }}"

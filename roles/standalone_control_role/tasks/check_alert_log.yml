@@ -1,5 +1,5 @@
 ---
-##This script copies the check_alert_log.bash script to server and checks the alert log for errors and warnings.
+## This script copies the check_alert_log.bash script to server and checks the alert log for errors and warnings.
 ##
 
 - name: copy check_alert_log script to {{ server_name }}
@@ -7,7 +7,7 @@
     src: "{{ check_alertLog_script }}"
     dest: "{{ remote_script_directory }}/{{ check_alertLog_script }}"
     mode: "{{script_permission}}"
-    force: yes
+    force: true
   delegate_to: "{{ server_name }}"
 
 
@@ -19,7 +19,7 @@
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
   register: check_alertLog_status
-  become: yes
+  become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: sudo
 
@@ -27,4 +27,4 @@
   debug:
     msg: "{{ check_alertLog_status.stdout_lines }}"
   failed_when: "'ORA-' in check_alertLog_status.stdout"
-  ignore_errors: yes
+  ignore_errors: true
