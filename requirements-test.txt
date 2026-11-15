@@ -4,7 +4,7 @@
 # Needs a Docker engine and rsync on the machine that runs `molecule test`. The collections each scenario needs (the
 # driver's and the playbook's) are pinned in molecule/<scenario>/collections.yml and installed by Molecule itself.
 -r requirements.txt
-molecule==26.10.0
+molecule==26.11.0
 molecule-plugins[docker]==26.10.12
 # Pulled in by the docker extra; pinned for reproducible runs.
 docker==7.2.0
