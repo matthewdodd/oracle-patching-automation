@@ -350,7 +350,7 @@ the lower-cased SID (as before); `server_name` is now the current host (`invento
 
 | Variable | Default | Aliases / notes |
 |---|---|---|
-| `oracle_common_notify_webhook_url` | `teams_webhook_url`, else `vault_teams_webhook_url`, else `""` | Secret. Empty, `"<CHANGE_ME>"` or not https: skipped with a message. |
+| `oracle_common_notify_webhook_url` | `teams_webhook_url`, else `vault_teams_webhook_url`, else `""` | Secret. Empty or not https: the card is skipped with a message. Still holding `"<CHANGE_ME>"`: the target-side input validation (`validate.yml`) refuses the whole run; delete the vault entry to run without notifications. |
 | `oracle_common_notify_enabled` | `true` | `false` turns the cards off. |
 | `oracle_common_notify_validate_certs` | `true` | |
 | `oracle_common_notify_ca_path` | `""` | CA bundle on the sending host. |
@@ -500,8 +500,9 @@ with `no_log`. Details: `inventory/README.md`.
 ## Teams notifications (Teams Workflows webhook)
 
 The retired Office 365 connector card is replaced by an Adaptive Card posted to a Teams Workflows webhook with
-`ansible.builtin.uri` (TLS verified, `no_log`). **Best effort**: a card that is skipped or cannot be sent is a
-WARNING and never fails the run. Cards are posted from `localhost` by default (`oracle_common_notify_delegate_to`).
+`ansible.builtin.uri` (TLS verified, `no_log`). **Best effort**: a card that is skipped (notifications off, URL
+empty or not https; reported with a message) or cannot be sent (WARNING) never fails the run. The exception is a URL
+still holding the `"<CHANGE_ME>"` placeholder: input validation on the targets refuses the run before patching. Cards are posted from `localhost` by default (`oracle_common_notify_delegate_to`).
 
 Set up: in the Teams channel, Workflows -> the template "Post to a channel when a webhook request is received"
 (trigger "When a Teams webhook request is received", action "Post card in a chat or channel"), copy the URL it shows
@@ -605,7 +606,7 @@ were kept or removed. A failed patch step leaves the databases down and the stag
 | `environment file is owned by another user` / `is world-writable` | The `<SID>.env` file must belong to the database owner or root and not be world-writable; fix its ownership and mode. |
 | Host key verification failed | Add the target's key to known_hosts (verify the fingerprint out of band). |
 | ServiceNow `required, from the Ansible Vault` | Create the environment's `vault.yml` and pass `--vault-id <env>@prompt` (AAP: attach the Vault credential). |
-| No Teams card | The webhook is empty / placeholder / not https (the run shows why), or the post failed (WARNING). |
+| No Teams card | The webhook is empty or not https (the run shows why), or the post failed (WARNING). A webhook still holding `"<CHANGE_ME>"` does not just skip the card: input validation on the targets refuses the run (`oracle_common_notify_webhook_url: still the placeholder`); replace it or delete `vault_teams_webhook_url`. |
 | Shutdown verification fails | The database did not stop within retries x delay (`standalone_control_role_shutdown_verify_*`). |
 | Re-run after a partial patch | If the home was patched but datapatch did not run everywhere, the failure report names the databases; run datapatch for them (re-running relies on OPatch's handling of an installed patch). |
 

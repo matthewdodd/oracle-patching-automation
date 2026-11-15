@@ -21,6 +21,7 @@
 
 # Teams Workflows webhook URL (https; the URL is a bearer secret) -> oracle_common_notify_webhook_url.
 # Delete the entry to run without notifications (they are then skipped with a message).
+# Left as "<CHANGE_ME>", the whole run is refused by input validation (it is not just skipped).
 vault_teams_webhook_url: "<CHANGE_ME>"
 
 # ServiceNow change check -> oracle_common_snow_instance / _username / _password. Instance: an https URL or the bare
