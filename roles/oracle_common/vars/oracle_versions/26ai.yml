@@ -6,9 +6,11 @@
 __oracle_common_version_definition:
   label: Oracle AI Database 26ai
   # UNVERIFIED defaults (no 26ai host was available): confirm them on a real host and override if needed.
-  # Detected version that selects this entry automatically: a version_full of release update 23.26 or later
-  # (e.g. 23.26.0.0.0), or a version reported as 26.x. A database that reports only 23.0.0.0.0 is detected as
-  # 23ai: set oracle_common_db_version (alias oracle_patch_db_version) to 26ai for such hosts.
+  # Detected version that selects this entry automatically: a version_full (v$instance.version_full, read by
+  # database_version.bash and preferred over v$instance.version for the selection) of release update 23.26 or
+  # later (e.g. 23.26.0.0.0), or a version reported as 26.x. Only a database that reports no version_full at all
+  # (and 23.0.0.0.0 as version) falls back to 23ai; oracle_common_db_version (alias oracle_patch_db_version) set to
+  # 26ai still selects this entry explicitly.
   match_regex: '\A(?:23\.(?:2[6-9]|[3-9][0-9])|26)(?:\.[0-9]+)*\Z'
   # Detected versions accepted when this entry is selected explicitly (oracle_common_db_version).
   accept_regex: '\A2[36](?:\.[0-9]+)*\Z'

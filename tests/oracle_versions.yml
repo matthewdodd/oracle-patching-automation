@@ -6,8 +6,10 @@
 #
 # 1. The registry holds exactly the five version files (12.1, 12.2, 19, 23ai, 26ai), each loaded unchanged;
 #    overrides merge over a file, and invalid definitions are refused.
-# 2. Detected versions select the right entry (version and version_full forms; 23ai vs 26ai by release update;
-#    explicit selection with oracle_common_db_version); unknown or unreadable versions stop with a clear message.
+# 2. Detected versions select the right entry (version and version_full forms; 23ai vs 26ai by release update,
+#    with version_full preferred over version for the selection while db_ver stays the first four characters of
+#    version; explicit selection with oracle_common_db_version wins); unknown or unreadable versions stop with a
+#    clear message.
 # 3. The patch file name (original default <AIX|LINUX>_jan<YY>.tar.gz; configurable cycle, year and name),
 #    repository folder, staging directory and owner are resolved per version and layout, and the explicit
 #    repository/release comparison that replaced the fixed-offset sanity check refuses a mismatched folder.
@@ -58,6 +60,25 @@
       - {name: 26ai as release update 23.31, detected: 23.31.1.0.0, id: 26ai}
       - {name: 26ai reported as 26.x, detected: 26.1.0.0.0, id: 26ai}
       - {name: 26ai selected explicitly on 23.0.0.0.0, detected: 23.0.0.0.0, db_version: 26ai, id: 26ai}
+      # --- version (v$instance.version) plus version_full (v$instance.version_full) --------------------
+      - {name: 23.0.0.0.0 with version_full 23.26.0.0.0 selects 26ai, detected: 23.0.0.0.0, full: 23.26.0.0.0, id: 26ai, release: "23.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/26.0.0", staging_dir: /u01/oracle/software_dir/26ai/jan26_ORCL01}}
+      - {name: 23.0.0.0.0 with version_full 23.7.0.0.0 selects 23ai, detected: 23.0.0.0.0, full: 23.7.0.0.0, id: 23ai, release: "23.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/23.0.0", staging_dir: /u01/oracle/software_dir/23ai/jan26_ORCL01}}
+      - {name: 23.0.0.0.0 without version_full falls back to 23ai, detected: 23.0.0.0.0, full: "", id: 23ai, release: "23.0"}
+      - {name: 19.0.0.0.0 with version_full 19.21.0.0.0 keeps db_ver 19.0, detected: 19.0.0.0.0, full: 19.21.0.0.0, id: "19", release: "19.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/19.0.0", staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01}}
+      - {name: 12.2.0.1.0 with an empty version_full selects 12.2, detected: 12.2.0.1.0, full: "", id: "12.2", release: "12.2",
+         patch: {staging_dir: /u01/oracle/software_dir/12.2/jan26_ORCL01}}
+      - {name: 12.1.0.2.0 with an empty version_full keeps db_ver 12.1, detected: 12.1.0.2.0, full: "", id: "12.1", release: "12.1"}
+      - {name: explicit 23ai beats version_full 23.26.0.0.0, detected: 23.0.0.0.0, full: 23.26.0.0.0, db_version: 23ai, id: 23ai, release: "23.0"}
+      - {name: explicit 26ai beats version_full 23.7.0.0.0, detected: 23.0.0.0.0, full: 23.7.0.0.0, db_version: 26ai, id: 26ai}
+      - {name: explicit 26ai refused when version_full is 19c, detected: 23.0.0.0.0, full: 19.21.0.0.0, db_version: 26ai,
+         message: "reports version 19.21.0.0.0, which that entry does not accept"}
+      - {name: version_full of another release than version decides, detected: 23.0.0.0.0, full: 21.3.0.0.0,
+         message: "Database version 21.3.0.0.0 is not supported"}
+      - {name: version_full with a trailing newline, detected: 23.0.0.0.0, full: "23.26.0.0.0\n", message: "Could not read the database version_full"}
+      - {name: unreadable version_full, detected: 19.0.0.0.0, full: "ORA-00904", message: "Could not read the database version_full"}
       - {name: 19 selected explicitly on 19.0.0.0.0, detected: 19.0.0.0.0, db_version: "19", id: "19"}
       - {name: explicit 26ai refused on a 19c database, detected: 19.0.0.0.0, db_version: 26ai, message: "which that entry does not accept"}
       - {name: 11.2 not supported, detected: 11.2.0.4.0, message: "Database version 11.2.0.4.0 is not supported"}
@@ -199,6 +220,7 @@
         label: "{{ version_case.name }}"
       vars:
         oracle_common_detected_version: "{{ version_case.detected }}"
+        oracle_common_detected_version_full: "{{ version_case.full | default('') }}"
         oracle_common_db_version: "{{ version_case.db_version | default('') }}"
         oracle_common_patch_repo_url: "{{ version_case.repo_url | default(versions_base) }}"
         oracle_common_patch_repo_version_subdir: "{{ version_case.subdir | default(true) }}"
@@ -210,3 +232,29 @@
         oracle_common_patch_staging_dir: "{{ version_case.staging_dir | default('') }}"
         oracle_common_is_grid_layout: "{{ version_case.grid | default('false') }}"
         oracle_common_artifact_platform: "{{ version_case.platform | default('LINUX') }}"
+
+    # initialization_role passes v$instance.version_full (db_version_full.txt, missing or empty tolerated) to the
+    # selection and keeps db_ver from v$instance.version (read as data: the role needs a database host).
+    - name: Check initialization_role passes version_full to the selection and keeps db_ver from version
+      ansible.builtin.assert:
+        that:
+          - __init_select | length == 1
+          - __init_select[0].vars.oracle_common_detected_version is match('\\A\\{\\{ *db_ver_long *\\}\\}\\Z')
+          - "'__initialization_role_db_version_full_file.content' in __init_select[0].vars.oracle_common_detected_version_full"
+          - "'else' in __init_select[0].vars.oracle_common_detected_version_full"
+          - __init_slurp | length == 1
+          - __init_slurp[0]['ansible.builtin.slurp'].src is search('/db_version_full\\.txt\\Z')
+          - __init_slurp[0].when | length > 0
+          - __init_dbver | length == 1
+          - __init_dbver[0]['ansible.builtin.set_fact'].db_ver is match('\\A\\{\\{ *oracle_common_detected_release *\\}\\}\\Z')
+        fail_msg: >-
+          initialization_role wiring of the version selection changed: select {{ __init_select }}, version_full read
+          {{ __init_slurp }}, db_ver {{ __init_dbver }}
+        quiet: true
+      vars:
+        __init_tasks: >-
+          {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/main.yml') | from_yaml)
+             | selectattr('block', 'defined') | map(attribute='block') | flatten }}
+        __init_select: "{{ __init_tasks | selectattr('name', 'equalto', 'Select the Oracle version') | list }}"
+        __init_slurp: "{{ __init_tasks | selectattr('name', 'equalto', 'Ingest database version_full information') | list }}"
+        __init_dbver: "{{ __init_tasks | selectattr('name', 'equalto', 'Set the database version facts') | list }}"

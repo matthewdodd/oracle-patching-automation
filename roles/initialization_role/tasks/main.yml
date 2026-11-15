@@ -114,18 +114,42 @@
       ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
         db_ver_long: "{{ __initialization_role_db_version_file['content'] | b64decode | trim }}"
 
+    # v$instance.version_full (18c and later), written by database_version.bash next to db_version.txt. Missing or
+    # empty (12.1/12.2, or an older script) means "not available": the version is then selected by db_ver_long.
+    - name: Check for the database version_full information
+      ansible.builtin.stat:
+        path: "{{ remote_output_directory }}/db_version_full.txt"
+        get_checksum: false
+      register: __initialization_role_db_version_full_stat
+
+    - name: Ingest database version_full information
+      ansible.builtin.slurp:
+        src: "{{ remote_output_directory }}/db_version_full.txt"
+      register: __initialization_role_db_version_full_file
+      when:
+        - __initialization_role_db_version_full_stat.stat.exists | default(false)
+        - __initialization_role_db_version_full_stat.stat.isreg | default(false)
+
     # Selects the vars/oracle_versions/<version>.yml entry of oracle_common for the detected version (12.1,
-    # 12.2, 19, 23ai, 26ai); an unknown version stops here instead of falling back to the 12.1 artifacts.
+    # 12.2, 19, 23ai, 26ai): by version_full when the database reports one (so 26ai, release update 23.26 and later,
+    # is told apart from 23ai, which both report 23.0.0.0.0 as version), else by db_ver_long. An explicit
+    # oracle_common_db_version (alias oracle_patch_db_version) still wins. An unknown version stops here instead
+    # of falling back to the 12.1 artifacts.
     - name: Select the Oracle version
       ansible.builtin.include_role:
         name: oracle_common
         tasks_from: oracle_version_select
       vars:
         oracle_common_detected_version: "{{ db_ver_long }}"
+        oracle_common_detected_version_full: >-
+          {{ (__initialization_role_db_version_full_file.content | b64decode | trim)
+             if (__initialization_role_db_version_full_file.content is defined) else '' }}
 
+    # db_ver stays the first four characters of v$instance.version (e.g. 19.0), as before: it names the staging
+    # directory <prefix>/software_dir/<db_ver>/... and drives the AIX 12.1 checks.
     - name: Set the database version facts
       ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact names, kept for compatibility
-        db_ver: "{{ db_ver_long[:4] }}"
+        db_ver: "{{ oracle_common_detected_release }}"
         artf_ver: "{{ oracle_common_oracle_version.artifact_dir }}"
 
     # Resolves the patch file name (<AIX|LINUX>_<cycle><year>.tar.gz by default, the original

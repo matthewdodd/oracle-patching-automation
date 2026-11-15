@@ -82,8 +82,9 @@ and migrating existing job templates".
   commit SHAs); `inventory/example/`; an early assert for `target`.
 - **U1**: role `oracle_common` with one defaults file per concern, layered OS variables (`vars/<system>.yml`,
   `<os_family>.yml`, `<distribution>.yml`, `<os_family>-<major>.yml`, `<distribution>-<major>.yml`; RHEL 8/9/10 and
-  AIX), one file per Oracle version (12.1, 12.2, 19, **23ai, 26ai**) with per-environment overrides
-  (`oracle_common_oracle_version_overrides`) and explicit selection (`oracle_common_db_version` /
+  AIX), one file per Oracle version (12.1, 12.2, 19, **23ai, 26ai**; selected by `v$instance.version_full` when
+  the database reports it, so 26ai is told apart from 23ai, else by `v$instance.version`; `db_ver` unchanged) with
+  per-environment overrides (`oracle_common_oracle_version_overrides`) and explicit selection (`oracle_common_db_version` /
   `oracle_patch_db_version`), the EL7 / Amazon Linux 2 guard, strict input validation (anchored `\A..\Z` patterns,
   one `..` path rule, `'%04o'` mode normalisation, exact checksum format, `"<CHANGE_ME>"` rejected), configurable
   patch cycle, year and file name (`oracle_patch_cycle`, `oracle_patch_year`, `oracle_patch_file_name`), configurable
@@ -159,8 +160,9 @@ and migrating existing job templates".
 
 ### Known open items (owner)
 
-- 23ai / 26ai defaults are unverified (version detection reports `v$instance.version`, so 26ai needs
-  `oracle_common_db_version: 26ai`; repository folders, README patterns and datapatch mode to confirm).
+- 23ai / 26ai defaults are unverified: the version is selected by `v$instance.version_full` when reported (23.26 and
+  later selects 26ai, earlier 23.x selects 23ai; without version_full a 23.0.0.0.0 database is treated as 23ai);
+  repository folders, README patterns and datapatch mode to confirm.
 - Script-only toggles not yet exposed by the playbooks: `ORA_OPATCH_UPGRADE`, `ORA_STATUS_STARTUP` (prerequisite-only
   runs still upgrade OPatch, run utlrp and start a database that is not open, as before),
   `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, `ORA_ENV_FILE_ALLOW_ANY_OWNER`, explicit patch ids.

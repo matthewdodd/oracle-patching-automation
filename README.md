@@ -86,8 +86,12 @@ become the unprivileged database owner (see [Security defaults](#security-defaul
 ## Supported Oracle versions
 
 One file per version in `roles/oracle_common/vars/oracle_versions/`. The version is detected from the running
-database (`database_version.bash`, `v$instance.version`) and selects the file whose `match_regex` matches; a version
-that matches no file, or several, fails the run (the original silently used the 12.1 artifacts).
+database (`database_version.bash`) and selects the file whose `match_regex` matches. The selection uses
+`v$instance.version_full` (18c and later, e.g. `19.21.0.0.0`, `23.26.0.0.0`) when the database reports one, and
+`v$instance.version` otherwise (12.1, 12.2); `db_ver` and the staging path keep using `v$instance.version` (e.g.
+`19.0`), as before. A version that matches no file, or several, fails the run (the original silently used the 12.1
+artifacts). `oracle_common_db_version` (alias `oracle_patch_db_version`) selects a file explicitly and wins over the
+detection.
 
 | Version file | Matches (detected version) | Repository folder (`artifact_dir`) | Staging component | Notes |
 |---|---|---|---|---|
@@ -110,9 +114,11 @@ oracle_common_oracle_version_overrides:
 
 **23ai and 26ai (unverified defaults).** No 23ai or 26ai host was available. Oracle AI Database 26ai is reported to
 be delivered as Release Update 23.26 and later of the 23ai code line, so `v$instance.version` may report
-`23.0.0.0.0` for both. The detection reads `v$instance.version` only, so **a 26ai database is detected as 23ai**
-unless you set `oracle_common_db_version: 26ai` (alias `oracle_patch_db_version`) for those hosts or jobs; the
-detected version must then still match the entry's `accept_regex`. The repository folders (`23.0.0`, `26.0.0`), the
+`23.0.0.0.0` for both. The default therefore selects by `v$instance.version_full`: `23.4` to `23.25` selects `23ai`,
+`23.26` and later (or `26.*`) selects `26ai`. Only a database that reports no `version_full` falls back to `23ai`;
+for such hosts, or if your 26ai databases report their version differently, set `oracle_common_db_version: 26ai`
+(alias `oracle_patch_db_version`) or override `match_regex`; an explicitly selected entry must still accept the
+detected version (`accept_regex`). The repository folders (`23.0.0`, `26.0.0`), the
 README patterns (the 19c wording is assumed) and the datapatch mode are defaults to confirm on a real host and
 override if needed.
 
@@ -399,7 +405,7 @@ These are set by the playbooks (or by tests) when they include a task file, not 
 | `oracle_common` `failure_record` | `oracle_common_failure_stage` |
 | `oracle_common` `failure_report` | `oracle_common_failure_stage`, `oracle_common_failure_call` (default `fail`), `oracle_common_failure_summary_state` (default `patching`), `oracle_common_failure_cleanup_done` (default `false`) |
 | `oracle_common` `progress` | `oracle_common_progress_update`, e.g. `{databases: {ORCL01: stopped}}` |
-| `oracle_common` `oracle_version_select` | `oracle_common_detected_version` |
+| `oracle_common` `oracle_version_select` | `oracle_common_detected_version`, optional `oracle_common_detected_version_full` |
 | `oracle_common` `guard_os_release` | `oracle_common_os_release_text` |
 | `oracle_common` `shared_home` | none |
 | `oracle_database_patch_role` `run_prereq`, `main`, `clean_files_from_server` | none |
@@ -599,7 +605,7 @@ were kept or removed. A failed patch step leaves the databases down and the stag
 | `Refusing to patch the Oracle home ...` | Other databases use the home: add them to `oracle_patch_databases` (the message names them). |
 | `... has no entry for DATABASE_NAME` | Add the SID to `sid_server_dict` in `group_vars/all/main.yml`. |
 | Database owner check fails | `DATABASE_NAME` must be running and owned by `sid_server_dict[<SID>].dbowner` at the start. |
-| `Database version ... is not supported` / `... matches several supported versions` / `oracle_common_db_version ... does not accept` | Add or override a file in `vars/oracle_versions/` (`oracle_common_oracle_version_overrides`), or set `oracle_common_db_version` (26ai). |
+| `Database version ... is not supported` / `... matches several supported versions` / `oracle_common_db_version ... does not accept` | Add or override a file in `vars/oracle_versions/` (`oracle_common_oracle_version_overrides`), or set `oracle_common_db_version`. |
 | Repository folder mismatch | The URL names another release; fix `oracle_common_patch_repo_url` or set `oracle_common_patch_repo_version_check: false` for a repository not organised by release. |
 | Download fails | The message gives the HTTP status (URL and credentials removed). Internal CA: `oracle_common_patch_ca_path`. |
 | `Permission denied` / `Failed to set permissions` when becoming the database owner | Install `acl` on Linux, set `ansible_common_remote_group`, or connect as root (`ansible.cfg`). |

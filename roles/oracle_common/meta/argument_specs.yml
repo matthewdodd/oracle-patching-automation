@@ -266,7 +266,17 @@ argument_specs:
       oracle_common_detected_version:
         type: str
         required: true
-        description: Version reported by the database, e.g. 19.0.0.0.0 or a version_full such as 23.26.0.0.0.
+        description:
+          - v$instance.version reported by the database, e.g. 19.0.0.0.0 (23.0.0.0.0 on both 23ai and 26ai).
+          - Its first four characters are returned as oracle_common_detected_release (the original db_ver).
+      oracle_common_detected_version_full:
+        type: str
+        required: false
+        default: ""
+        description:
+          - v$instance.version_full (18c and later), e.g. 19.21.0.0.0, 23.7.0.0.0 or 23.26.0.0.0; empty when not available.
+          - When non-empty it selects the version entry instead of oracle_common_detected_version, so 26ai (release
+            update 23.26 and later) is told apart from 23ai. An explicit oracle_common_db_version still wins.
 
   patch_artifact:
     short_description: Resolve the patch bundle file name, repository URL and staging directory, and check the repository release folder.
