@@ -84,5 +84,6 @@ whose Vault Identifier is `<env>` to the environment's job templates (no `--vaul
 
 Never commit an unencrypted `vault.yml` or a vault password file (`.gitignore` excludes `.vault_pass*` and
 `vault_pass*`), and never paste a secret into a chat, a ticket or a job's extra vars. Check before every commit that
-`head -n 1` of each `vault.yml` starts with `$ANSIBLE_VAULT;`. If an unencrypted secret was ever committed, it is in
+`head -n 1` of each `vault.yml` starts with `$ANSIBLE_VAULT;` (CI's `lint` job fails on a committed vault file without
+that header; `*.example` files are exempt). If an unencrypted secret was ever committed, it is in
 the git history: rotate it, then encrypt the file.

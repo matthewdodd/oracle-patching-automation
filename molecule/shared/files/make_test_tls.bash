@@ -19,8 +19,11 @@ make_ca() {
 make_server_cert() {
   local dir=$1 host=$2 san
   if [[ $host =~ ^[0-9.]+$ ]]; then san="IP:$host"; else san="DNS:$host"; fi
+  # The key identifiers are required by clients that verify strictly (Python 3.13+ sets VERIFY_X509_STRICT, which
+  # refuses a certificate without an Authority Key Identifier); tests/download.yml uses this fixture on the controller.
   printf '%s\n' "basicConstraints=CA:FALSE" "keyUsage=critical,digitalSignature,keyEncipherment" \
-    "extendedKeyUsage=serverAuth" "subjectAltName=$san" >"$dir/server.ext"
+    "extendedKeyUsage=serverAuth" "subjectAltName=$san" "subjectKeyIdentifier=hash" \
+    "authorityKeyIdentifier=keyid,issuer" >"$dir/server.ext"
   openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=$host" -keyout "$dir/server.key" -out "$dir/server.csr"
   openssl x509 -req -sha256 -days 7 -in "$dir/server.csr" -CA "$dir/ca.crt" -CAkey "$dir/ca.key" -CAcreateserial \
     -extfile "$dir/server.ext" -out "$dir/server.crt"

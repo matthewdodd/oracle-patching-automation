@@ -66,7 +66,6 @@
         dest: '{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}'
         checksum: "{{ oracle_common_patch_checksum }}"
         validate_certs: "{{ (oracle_common_patch_validate_certs | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
-        ca_path: "{{ oracle_common_patch_ca_path if (oracle_common_patch_ca_path | default('') | length > 0) else omit }}"
         url_username: "{{ oracle_common_patch_repo_username if (oracle_common_patch_repo_username | default('') | length > 0) else omit }}"
         url_password: "{{ oracle_common_patch_repo_password if (oracle_common_patch_repo_password | default('') | length > 0) else omit }}"
         force_basic_auth: "{{ (oracle_common_patch_force_basic_auth | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
@@ -74,10 +73,15 @@
         mode: "{{ oracle_common_modes.file }}"
         group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
         tmp_dest: "{{ temp_dir }}"
+      # get_url has no ca_path option (ansible-core 2.22): the CA bundle (oracle_common_patch_ca_path) reaches the module
+      # through SSL_CERT_FILE, which OpenSSL reads when the module builds its default TLS context. The bundle is then
+      # trusted in addition to the system CA certificates that get_url always loads.
       environment: >-
-        {{ {'https_proxy': oracle_common_patch_proxy, 'HTTPS_PROXY': oracle_common_patch_proxy,
-            'http_proxy': oracle_common_patch_proxy, 'HTTP_PROXY': oracle_common_patch_proxy}
-           if (__oracle_database_patch_role_use_proxy and (oracle_common_patch_proxy | default('') | length > 0)) else {} }}
+        {{ ({'https_proxy': oracle_common_patch_proxy, 'HTTPS_PROXY': oracle_common_patch_proxy,
+             'http_proxy': oracle_common_patch_proxy, 'HTTP_PROXY': oracle_common_patch_proxy}
+            if (__oracle_database_patch_role_use_proxy and (oracle_common_patch_proxy | default('') | length > 0)) else {})
+           | combine({'SSL_CERT_FILE': oracle_common_patch_ca_path}
+                     if (oracle_common_patch_ca_path | default('') | length > 0) else {}) }}
       vars:
         __oracle_database_patch_role_use_proxy: "{{ (oracle_common_patch_use_proxy | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
       register: __oracle_database_patch_role_download

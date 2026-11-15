@@ -11,6 +11,9 @@
 #    files and directories 0750, nothing for others. The staging directory is recorded for the cleanup.
 # 2. A wrong checksum fails the run with a message that names the checksum and does not show the repository URL.
 # 3. A failed request does not show the repository credentials or the URL.
+# 4. TLS with a private CA: an https repository (the Molecule fixture molecule/shared/files/https_repository.py, with a
+#    throw-away CA from make_test_tls.bash) is downloaded from when oracle_common_patch_ca_path names the CA, and refused
+#    (certificate not verified) without it. get_url has no ca_path option, so the CA must reach it another way.
 - name: Patch download regression test
   hosts: localhost
   connection: local
@@ -174,7 +177,102 @@
               - "'var-secret-43' not in dl_unreachable_msg"
               - "'127.0.0.1:9' not in dl_unreachable_msg"
             fail_msg: "message: {{ dl_unreachable_msg | default('none') }}"
+
+        # --- 4. https repository with a private CA ----------------------------------------------------------------
+        - name: Create a throw-away CA and server certificate for 127.0.0.1
+          ansible.builtin.command:
+            argv: [bash, "{{ playbook_dir }}/../molecule/shared/files/make_test_tls.bash", "{{ dl_tmp.path }}/tls", 127.0.0.1]
+          changed_when: true
+
+        - name: Pick a free local port
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - -c
+              - "import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])"
+          register: dl_port
+          changed_when: false
+
+        - name: Start the https repository in the background
+          ansible.builtin.command:
+            argv:
+              - bash
+              - -c
+              - 'nohup "$@" >/dev/null 2>&1 & echo "$!"'
+              - https_repository
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../molecule/shared/files/https_repository.py"
+              - "{{ dl_tmp.path }}/repo"
+              - 127.0.0.1
+              - "{{ dl_port.stdout }}"
+              - "{{ dl_tmp.path }}/tls/server.crt"
+              - "{{ dl_tmp.path }}/tls/server.key"
+              - "{{ dl_tmp.path }}/access.log"
+          register: dl_server
+          changed_when: true
+
+        - name: Wait for the https repository
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ dl_port.stdout | int }}"
+            timeout: 30
+
+        - name: Download over https with the CA bundle (case 4)
+          # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: oracle_database_patch_role
+            tasks_from: copy_files_to_server
+          vars:
+            temp_dir: "{{ dl_tmp.path }}/staging_t4"
+            artf_file_name: "{{ dl_bundle }}"
+            oracle_common_patch: {repo_dir_url: "https://127.0.0.1:{{ dl_port.stdout }}"}
+            oracle_common_patch_ca_path: "{{ dl_tmp.path }}/tls/ca.crt"
+
+        - name: Read the file extracted from the https download
+          ansible.builtin.stat:
+            path: "{{ dl_tmp.path }}/staging_t4/37960098/README.html"
+          register: dl_https_staged
+
+        - name: Check the https download with the CA bundle worked (case 4)
+          ansible.builtin.assert:
+            that:
+              - dl_https_staged.stat.exists
+            fail_msg: the bundle was not downloaded and extracted from the https repository
+
+        - name: Download over https without the CA bundle
+          block:
+            - name: Run the https download without the CA bundle
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
+                tasks_from: copy_files_to_server
+              vars:
+                temp_dir: "{{ dl_tmp.path }}/staging_t5"
+                artf_file_name: "{{ dl_bundle }}"
+                oracle_common_patch: {repo_dir_url: "https://127.0.0.1:{{ dl_port.stdout }}"}
+
+            - name: Note that the unverified certificate was accepted
+              ansible.builtin.set_fact:
+                dl_untrusted_accepted: true
+          rescue:
+            - name: Keep the failure message (case 4)
+              ansible.builtin.set_fact:
+                dl_untrusted_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+
+        - name: Check the https download without the CA bundle was refused (case 4)
+          ansible.builtin.assert:
+            that:
+              - not (dl_untrusted_accepted | default(false))
+              - dl_untrusted_msg is search('(?i)certificate')
+            fail_msg: "message: {{ dl_untrusted_msg | default('none') }}"
       always:
+        - name: Stop the https repository
+          ansible.builtin.command:
+            argv: [kill, "{{ dl_server.stdout | trim }}"]
+          when: dl_server.stdout | default('') | trim | length > 0
+          changed_when: true
+          failed_when: false
+
         - name: Remove the temporary directory
           ansible.builtin.file:
             path: "{{ dl_tmp.path }}"

@@ -2,18 +2,24 @@
 # Environment settings read by roles/oracle_common (documented in roles/oracle_common/meta/argument_specs.yml
 # and roles/oracle_common/defaults/main/*.yml). Copy inventory/example/ to inventory/<env>/ and replace every
 # "<CHANGE_ME>": the validation rejects any value that still contains it, so an unedited copy cannot run.
+#
+# Each required value is written as "{{ <original input name> | default('<CHANGE_ME>') }}" so that existing job
+# templates that still pass the original name (artifactory_repo, oracle_patch_checksum, GROUP_NAME) keep working:
+# replace only the '<CHANGE_ME>' inside the quotes. A plain value also works, but then the original input name is
+# ignored for this inventory (group_vars take precedence over the role defaults that read it). An extra var (-e / AAP)
+# of the oracle_common_* name always wins over this file.
 
 # Required: https base URL of the patch repository (the release folder, e.g. 19.0.0, is appended).
 # The original input name artifactory_repo is still accepted (it already names the release folder).
-oracle_common_patch_repo_url: "<CHANGE_ME>"
+oracle_common_patch_repo_url: "{{ artifactory_repo | default('<CHANGE_ME>') }}"
 
 # Required: checksum of the patch bundle, <algorithm>:<hex digest>, e.g. sha256:<64 hex characters>, taken from
 # a trusted source (or <algorithm>:<https URL of a checksum file>). Usually a job input that changes per cycle.
-oracle_common_patch_checksum: "<CHANGE_ME>"
+oracle_common_patch_checksum: "{{ oracle_patch_checksum | default('<CHANGE_ME>') }}"
 
 # Required while oracle_common_manage_group_membership is true (the default): the OS group the database owner
 # and the patch staging owner (oracle / grid) join. The original input name GROUP_NAME is still accepted.
-oracle_common_group_name: "<CHANGE_ME>"
+oracle_common_group_name: "{{ GROUP_NAME | default('<CHANGE_ME>') }}"
 
 # Optional settings (defaults shown; uncomment to change):
 # oracle_common_patch_cycle: jan              # patch file <AIX|LINUX>_<cycle><year>.tar.gz
@@ -22,8 +28,10 @@ oracle_common_group_name: "<CHANGE_ME>"
 # oracle_common_is_grid_layout: false         # alias is_grid_layout
 # oracle_common_patch_base_dir_oracle: /u01/oracle
 # oracle_common_patch_base_dir_grid: /u02/grid
-# oracle_common_staging_base: /tmp
-# oracle_common_script_permission: "0755"     # alias script_permission; group/world-writable modes are rejected
+# oracle_common_staging_base: /u01/oracle/ansible_patch_work   # default: <oracle_common_patch_base_dir_oracle>/ansible_patch_work
+# oracle_common_script_permission: "0750"     # alias script_permission; group/world-writable modes are rejected
+# oracle_common_dir_mode: "0750"
+# oracle_common_file_mode: "0640"
 # oracle_common_env_dir: /local               # <SID>.env files
 # oracle_common_db_version: 26ai              # force a version entry (alias oracle_patch_db_version)
 # oracle_common_oracle_version_overrides:

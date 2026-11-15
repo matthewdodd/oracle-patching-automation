@@ -115,6 +115,12 @@ and migrating existing job templates".
   `prod` skeletons (`"<CHANGE_ME>"` placeholders that fail validation, wired `vault_*` mappings,
   `vault.yml.example` per environment, `inventory/README.md`).
 
+- **U8**: CI (`lint` job) rejects a committed vault file without the `$ANSIBLE_VAULT;` header (`*.example` exempt),
+  shellchecks the script tests and the Molecule fixture, and runs every `tests/*.yml` playbook and
+  `tests/shell/run.bash`; the Molecule workflow ends with one `molecule` job that sums up the scenario jobs (the
+  required check); `.github/dependabot.yml` for the GitHub Actions SHA pins and the pip tooling pins;
+  `tests/download.yml` downloads from an https repository with a private CA.
+
 ### Changed
 
 - Variables moved from role `vars/` (only `-e` could override them) to `defaults/`, so the inventory can set them;
@@ -127,6 +133,14 @@ and migrating existing job templates".
   raw `sudo`, no hard-coded `become_method`); FQCN everywhere; ansible-lint production profile clean.
 - `ignore_errors` is gone; warning-only behaviours (alert log and listener log checks) are explicit WARNING tasks.
 - Script copy sources use `role_path`, so the playbooks work from any directory (e.g. an AAP project subdirectory).
+- `oracle_common_patch_ca_path` reaches the download as `SSL_CERT_FILE` (the CA bundle is trusted in addition to
+  the system trust store): `ansible.builtin.get_url` has no `ca_path` option, so setting it used to fail the run with
+  "Unsupported parameters".
+- `inventory/example/group_vars/all/oracle_common.yml` writes the required values as
+  `"{{ <original name> | default('<CHANGE_ME>') }}"` like the environment skeletons, so `artifactory_repo`,
+  `oracle_patch_checksum` and `GROUP_NAME` keep working with it, and shows the current defaults (work base
+  `<base_dir_oracle>/ansible_patch_work`, script mode `0750`); its `vault.yml.example` lists the repository
+  credentials and states that a `"<CHANGE_ME>"` webhook refuses the run.
 
 ### Removed
 

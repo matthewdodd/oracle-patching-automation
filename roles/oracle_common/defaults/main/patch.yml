@@ -38,7 +38,8 @@ oracle_common_patch_repo_allow_http: false
 # certificate the target cannot verify; prefer oracle_common_patch_ca_path. The bundle's checksum
 # (oracle_common_patch_checksum) is verified either way.
 oracle_common_patch_validate_certs: true
-# Optional CA bundle (PEM file on the target), e.g. an internal CA. Empty: the system trust store.
+# Optional CA bundle (PEM file on the target), e.g. an internal CA, trusted in addition to the system trust store
+# (passed to the download as SSL_CERT_FILE). Empty: the system trust store only.
 oracle_common_patch_ca_path: ""
 # Use a proxy for the download. Default false (the original use_proxy: no). When true, the proxy environment of the
 # connection is used, or oracle_common_patch_proxy when set (e.g. http://proxy.example.com:8080; no default).

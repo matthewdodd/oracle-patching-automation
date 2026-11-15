@@ -6,9 +6,9 @@ name: Molecule
 #   default      AlmaLinux 9, one database (canonical input names), re-run already applied, wrong checksum refused
 #   el8          Rocky Linux 8, one upper-case SID without Java (original input names / aliases)
 #   shared-home  AlmaLinux 9, two databases on one ORACLE_HOME: refused with one in scope, patched with both
-# Runs on every pull request, with no paths filter, so a required check reports on every PR, docs-only ones included
-# (a required check that never runs blocks the PR forever). Also runs on push to master, so master's own status is
-# visible after each merge, and on demand.
+# Runs on every pull request, with no paths filter, so the required "molecule" check (the last job, which sums up the
+# scenario jobs) reports on every PR, docs-only ones included (a required check that never runs blocks the PR
+# forever). Also runs on push to master, so master's own status is visible after each merge, and on demand.
 on:
   pull_request:
   push:
@@ -23,7 +23,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  molecule:
+  scenario:
+    # Check names "scenario (default)", "scenario (el8)", "scenario (shared-home)". Branch protection requires the
+    # single "molecule" check below, which reports the result of all of them.
+    name: scenario (${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -57,3 +60,19 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           PY_COLORS: "1"
           ANSIBLE_FORCE_COLOR: "1"
+
+  molecule:
+    # The required status check: one stable name whatever the scenario list. Runs even when a scenario failed or was
+    # cancelled, and succeeds only when every scenario succeeded.
+    needs: scenario
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every scenario passed
+        # The result reaches the shell through the environment, never interpolated into the script.
+        run: |
+          echo "Molecule scenarios: $SCENARIO_RESULT"
+          test "$SCENARIO_RESULT" = success
+        env:
+          SCENARIO_RESULT: ${{ needs.scenario.result }}

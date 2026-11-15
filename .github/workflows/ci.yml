@@ -31,9 +31,38 @@ jobs:
         if: always()
         run: yamllint .
 
+      - name: Committed vault files are encrypted
+        if: always()
+        # Fails on any tracked vault.yml / vault.yaml, or any file under group_vars/ or host_vars/ named
+        # (or inside a directory named) vault*, that lacks the "$ANSIBLE_VAULT;" header. *.example is exempt.
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.example) continue ;;
+            esac
+            case "/$path" in
+              */vault.yml | */vault.yaml | */group_vars/vault* | */host_vars/vault* | */group_vars/*/vault* | */host_vars/*/vault*) ;;
+              *) continue ;;
+            esac
+            first_line=""
+            IFS= read -r first_line < "$path" || true
+            if [[ "$first_line" != "\$ANSIBLE_VAULT;"* ]]; then
+              echo "::error file=${path}::${path} is not encrypted with ansible-vault (no \$ANSIBLE_VAULT; header)"
+              status=1
+            fi
+          done < <(git ls-files -z)
+          exit "$status"
+
       - name: shellcheck
         if: always()
-        run: shellcheck roles/*/files/*.bash
+        # The role scripts, the script tests and their stubs, and the Molecule fixture (also checked by the molecule
+        # workflow).
+        run: >-
+          shellcheck roles/*/files/*.bash tests/shell/*.bash tests/shell/stubs/*/*
+          molecule/shared/files/*.bash molecule/shared/files/stubs/*
 
       - name: ansible-playbook --syntax-check (full patch)
         if: always()
@@ -47,3 +76,25 @@ jobs:
       - name: ansible-lint
         if: always()
         run: ansible-lint
+
+      - name: Test playbooks (controller only)
+        if: always()
+        # Every tests/*.yml playbook runs on the runner itself (-c local) and changes nothing outside temporary
+        # directories; every one is run, and the step fails if any of them fails.
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          for test in tests/*.yml; do
+            echo "::group::${test}"
+            if ! ansible-playbook -i localhost, -c local "$test"; then
+              echo "::error file=${test}::${test} failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - name: Shell script tests (stubbed Oracle tools)
+        if: always()
+        run: tests/shell/run.bash

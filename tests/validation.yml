@@ -29,8 +29,6 @@
     - vars/valid_inputs.yml
   vars:
     validation_sha256: "sha256:{{ '0123456789abcdef' * 4 }}"
-    validation_example: >-
-      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../inventory/example/group_vars/all/oracle_common.yml') | from_yaml }}
     validation_cases:
       # --- baseline ---------------------------------------------------------------------------------
       - {name: valid baseline, set: {}, errors: []}
@@ -306,6 +304,13 @@
         errors: [oracle_common_patch_repo_url, oracle_common_patch_checksum, oracle_common_group_name, "still the placeholder"]
         count: 4
   tasks:
+    # Loaded like an inventory file, so its "{{ <original name> | default('<CHANGE_ME>') }}" values are templates
+    # rendered where they are used (the placeholder unless the original input name is set).
+    - name: Load the example inventory settings
+      ansible.builtin.include_vars:
+        file: ../inventory/example/group_vars/all/oracle_common.yml
+        name: validation_example
+
     - name: Start every case from the valid inputs
       ansible.builtin.set_fact:
         "{{ item.key }}": "{{ item.value }}"
@@ -319,3 +324,23 @@
       loop_control:
         loop_var: validation_case
         label: "{{ validation_case.name }}"
+
+    - name: Check the example inventory placeholders resolve to "<CHANGE_ME>" without the original input names
+      ansible.builtin.assert:
+        that:
+          - validation_example.oracle_common_patch_repo_url == '<CHANGE_ME>'
+          - validation_example.oracle_common_patch_checksum == '<CHANGE_ME>'
+          - validation_example.oracle_common_group_name == '<CHANGE_ME>'
+        fail_msg: "inventory/example/group_vars/all/oracle_common.yml: a required value is not the placeholder"
+
+    - name: Check the example inventory takes the original input names (artifactory_repo, oracle_patch_checksum, GROUP_NAME)
+      ansible.builtin.assert:
+        that:
+          - validation_example.oracle_common_patch_repo_url == artifactory_repo
+          - validation_example.oracle_common_patch_checksum == oracle_patch_checksum
+          - validation_example.oracle_common_group_name == GROUP_NAME
+        fail_msg: "inventory/example/group_vars/all/oracle_common.yml ignores an original input name"
+      vars:
+        artifactory_repo: https://repo.example.com/oracledatabase/19.0.0
+        oracle_patch_checksum: "{{ validation_sha256 }}"
+        GROUP_NAME: dbagroup  # noqa: var-naming[pattern] - the original input name under test

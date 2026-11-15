@@ -49,7 +49,8 @@ molecule converge && molecule verify        # keep the container for debugging; 
 ```
 
 CI runs every scenario on every pull request and on push to master (`.github/workflows/molecule.yml`, one job per
-scenario).
+scenario, "scenario (<name>)"); the job `molecule` succeeds only when every scenario succeeded and is the check that
+branch protection requires.
 
 Not covered: AIX (no container image; `lslpp`, `chgrpmem` and the 12.1 `qopiprep` fix are tested only by reading and by
 the controller-side tests in `tests/`), real Oracle software (SQL*Plus output, OPatch and datapatch behaviour come

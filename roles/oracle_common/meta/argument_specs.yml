@@ -148,7 +148,9 @@ argument_specs:
       oracle_common_patch_ca_path:
         type: str
         default: ""
-        description: Optional CA bundle (PEM, on the target) used to verify the patch repository.
+        description: >-
+          Optional CA bundle (PEM, on the target) used to verify the patch repository, in addition to the system trust
+          store (passed to the download as SSL_CERT_FILE).
       oracle_common_patch_use_proxy:
         type: bool
         default: false

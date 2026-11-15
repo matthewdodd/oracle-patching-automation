@@ -241,7 +241,7 @@ and `validate_job.yml`.
 | `oracle_common_patch_year` | target's year, two digits | Alias `oracle_patch_year`. Two or four digits. |
 | `oracle_common_patch_file_name` | derived | Aliases `oracle_patch_file_name`, `patch_file_name`. Explicit file name. |
 | `oracle_common_patch_validate_certs` | `true` | Verify the repository's TLS certificate. `false` is an opt-in (warning; the checksum is still verified). |
-| `oracle_common_patch_ca_path` | `""` | CA bundle (PEM, on the target), e.g. an internal CA. |
+| `oracle_common_patch_ca_path` | `""` | CA bundle (PEM, on the target), e.g. an internal CA, trusted in addition to the system trust store (passed to the download as `SSL_CERT_FILE`). |
 | `oracle_common_patch_use_proxy` | `false` | Use a proxy for the download (the original did not). |
 | `oracle_common_patch_proxy` | `""` | Proxy URL when `oracle_common_patch_use_proxy` is true. |
 | `oracle_common_patch_repo_username`, `oracle_common_patch_repo_password` | `vault_patch_repo_username` / `vault_patch_repo_password`, else `""` | HTTP basic authentication from the Vault; both or neither; never in the URL. |
@@ -612,12 +612,12 @@ were kept or removed. A failed patch step leaves the databases down and the stag
 
 ## Testing
 
-Local checks (CI, `.github/workflows/ci.yml` job `lint`, runs yamllint, shellcheck of `roles/*/files/*.bash`, both
-syntax checks and ansible-lint):
+Local checks (CI runs the same in `.github/workflows/ci.yml` job `lint`: yamllint, a check that every committed
+vault file is encrypted, shellcheck, both syntax checks, ansible-lint, every test playbook and the script tests):
 
 ```sh
-yamllint .
-shellcheck roles/*/files/*.bash tests/shell/*.bash
+yamllint .                                 # also covers .github/ (workflows, dependabot.yml)
+shellcheck roles/*/files/*.bash tests/shell/*.bash tests/shell/stubs/*/* molecule/shared/files/*.bash molecule/shared/files/stubs/*
 ansible-playbook -i inventory/example/hosts.yml --syntax-check oracle_database_patch.yml -e target=dbhost01.example.com
 ansible-playbook -i inventory/example/hosts.yml --syntax-check oracle_database_patch_prereq.yml -e target=dbhost01.example.com
 ansible-lint                               # production profile, 0 failures, 0 warnings, no skip list
@@ -628,8 +628,11 @@ tests/shell/run.bash                       # script tests with stubbed sqlplus, 
 The test playbooks cover input validation and placeholders, the legacy aliases, platforms and Oracle versions, the
 shared-home decision, the already-applied outcome, scope and working directories, the download (checksum, TLS,
 modes), group membership, the start/stop commands, notifications, the change check, the failure report and static
-security rules. Molecule scenarios (containers with stubbed Oracle tools) need a container runtime and are run in CI
-only; without one they are not executed locally. A real RHEL or AIX host with Oracle Database is needed for the final
+security rules. CI also fails when a tracked `vault.yml` / `vault.yaml` (or a `vault*` file under `group_vars/` or
+`host_vars/`) lacks the `$ANSIBLE_VAULT;` header (`*.example` files are exempt). The GitHub Actions are pinned to full
+commit SHAs, kept current with the Python tooling pins by Dependabot (`.github/dependabot.yml`). Branch protection
+should require the checks `lint` and `molecule` (the `molecule` job sums up the scenario jobs). Molecule scenarios
+(containers with stubbed Oracle tools) need a container runtime and are run in CI only; without one they are not executed locally. A real RHEL or AIX host with Oracle Database is needed for the final
 validation (owner).
 
 ## Extending

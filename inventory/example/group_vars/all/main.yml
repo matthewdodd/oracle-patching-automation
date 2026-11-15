@@ -10,7 +10,8 @@
 #   dbListener   database listener name
 #   pdbListener  PDB listener name (key required even when pdb is "")
 #
-# The control (startup/shutdown) steps look the SID up in lower case, so use lower-case keys.
+# The control (startup/shutdown) steps look the SID up in lower case first (as before), then as given, then
+# without case; differing upper- and lower-case entries for one SID are refused. Lower-case keys are simplest.
 sid_server_dict:
   orcl01:
     dbowner: oracle
