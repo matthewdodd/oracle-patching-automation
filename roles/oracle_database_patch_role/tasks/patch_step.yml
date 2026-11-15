@@ -1,0 +1,53 @@
+---
+# Runs one database_patch.bash step (include variables __oracle_database_patch_role_step: apply, apply_home or
+# datapatch, and __oracle_database_patch_role_step_sid) as the database owner, asynchronously: the step may run for
+# oracle_common_patch_timeout seconds (default 14400) and is checked every oracle_common_patch_poll_delay seconds up to
+# oracle_common_patch_poll_retries times (the polling window never exceeds the timeout; oracle_common preflight_scope.yml).
+# The output is always shown; a step that fails or does not finish in time fails the task with a clear message.
+- name: Run database_patch.bash {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
+  ansible.builtin.command:
+    argv:
+      - "{{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash"
+      - "{{ __oracle_database_patch_role_step_sid }}"
+      - "{{ __oracle_database_patch_role_step }}"
+      - "{{ patch_folder_name }}"
+  environment: "{{ oracle_common_script_env[__oracle_database_patch_role_step_sid] }}"
+  become: true
+  become_user: "{{ sid_server_dict[__oracle_database_patch_role_step_sid].dbowner }}"
+  async: "{{ oracle_common_patch_timeout | int }}"
+  poll: 0
+  register: __oracle_database_patch_role_job
+  changed_when: true
+
+- name: "Check on an async task: {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}"
+  ansible.builtin.async_status:
+    jid: "{{ __oracle_database_patch_role_job.ansible_job_id }}"
+  # The job belongs to the user who started it.
+  become: true
+  become_user: "{{ sid_server_dict[__oracle_database_patch_role_step_sid].dbowner }}"
+  register: __oracle_database_patch_role_job_result
+  until: __oracle_database_patch_role_job_result.finished | default(false) | bool
+  retries: "{{ oracle_common_patch_poll_retries | int }}"
+  delay: "{{ oracle_common_patch_poll_delay | int }}"
+  failed_when: false
+
+- name: Show the output of {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
+  ansible.builtin.debug:
+    var: __oracle_database_patch_role_job_result.stdout_lines
+
+- name: Check the result of {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
+  ansible.builtin.assert:
+    that:
+      - __oracle_database_patch_role_job_result.finished | default(false) | bool
+      - (__oracle_database_patch_role_job_result.rc | default(1) | int) == 0
+    fail_msg: >-
+      database_patch.bash {{ __oracle_database_patch_role_step }} for {{ __oracle_database_patch_role_step_sid }}
+      {{ ('failed with exit code ' ~ (__oracle_database_patch_role_job_result.rc | default('unknown'))
+          ~ ((': ' ~ (__oracle_database_patch_role_job_result.msg | regex_replace('[.]+\Z', '')))
+             if __oracle_database_patch_role_job_result.msg is defined else ''))
+         if (__oracle_database_patch_role_job_result.finished | default(false) | bool)
+         else ('had not finished after ' ~ ((oracle_common_patch_poll_retries | int) * (oracle_common_patch_poll_delay | int))
+               ~ ' s of polling (oracle_common_patch_timeout ' ~ oracle_common_patch_timeout ~ ' s); check its log in '
+               ~ oracle_common_run.databases[__oracle_database_patch_role_step_sid].work_dir) }}.
+      The database is left shut down and the staged patch is kept for diagnosis.
+    quiet: true

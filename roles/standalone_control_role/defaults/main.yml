@@ -35,3 +35,10 @@ stop_pdb_script: pdb_ctl.bash
 stop_pdbListener_script: listener_ctl.bash
 stop_database_script: database_ctl.bash
 stop_listener_script: listener_ctl.bash
+
+# After a shutdown, the database must be really down (no ora_pmon_<SID> process left) before anything else runs: the
+# process list is checked up to standalone_control_role_shutdown_verify_retries times,
+# standalone_control_role_shutdown_verify_delay seconds apart (default: up to 2 minutes). Aliases:
+# oracle_patch_shutdown_verify_retries, oracle_patch_shutdown_verify_delay.
+standalone_control_role_shutdown_verify_retries: "{{ oracle_patch_shutdown_verify_retries | default(12) }}"
+standalone_control_role_shutdown_verify_delay: "{{ oracle_patch_shutdown_verify_delay | default(10) }}"

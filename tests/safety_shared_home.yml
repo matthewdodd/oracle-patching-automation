@@ -1,0 +1,448 @@
+---
+# Shared ORACLE_HOME detection regression test (roles/oracle_common tasks/shared_home.yml, tasks/shared_home_decide.yml
+# and the __oracle_common_shared_home_* rules of defaults/main/safety.yml). Runs on the controller only; the end-to-end
+# part works in a temporary directory it removes afterwards. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_shared_home.yml
+#
+# 1. Decision rules, one assertion per case with stubbed home_inventory.bash output: a home used only by the databases
+#    in scope is accepted; a running database out of scope is always refused; a stopped one is refused unless
+#    oracle_common_allow_shared_home_partial; a database in scope on another home, or whose home cannot be read, is
+#    refused even by the prerequisite playbook (report-only); malformed output, a failed listing or a list without
+#    DATABASE_NAME is refused (reported only in report-only mode); SIDs are compared without case.
+# 2. tasks/shared_home_decide.yml itself refuses (fails) or accepts.
+# 3. tasks/shared_home.yml end to end: environment files are sourced for ORACLE_HOME, a stub home_inventory.bash (it
+#    prints the file named by ORA_ORATAB and logs its argument) lists the home, and the run is refused or accepted.
+- name: Shared ORACLE_HOME detection regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/defaults/main/safety.yml
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    # Become is not needed (nor possible) on the controller: the tasks become the database owner on real hosts.
+    ansible_become: false
+    home1: /u01/app/oracle/product/19.0.0/dbhome_1
+    home2: /u01/app/oracle/product/19.0.0/dbhome_2
+    # Stubbed home_inventory.bash listings used by the task-file and end-to-end parts.
+    listing_orcl02_running: "ORCL01\trunning\toratab\nORCL02\trunning\tpmon\n"
+    listing_orcl02_stopped: "ORCL01\trunning\toratab\nORCL02\tstopped\toratab\n"
+    listing_both_running: "ORCL01\trunning\toratab,pmon,envfile\nORCL02\trunning\tpmon,envfile\n"
+    shared_home_cases:
+      - name: one database alone on its home
+        inventory: "ORCL01\trunning\toratab,pmon,envfile\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: false
+      - name: a running database out of scope
+        inventory: "ORCL01\trunning\toratab,pmon\nORCL02\trunning\tpmon,envfile\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["running databases", "ORCL02"]
+        out_of_scope: [ORCL02]
+      - name: every database of the home in scope
+        inventory: "ORCL01\trunning\toratab,pmon\nORCL02\trunning\tpmon,envfile\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home1 }}"}
+        refused: false
+      - name: a stopped database out of scope
+        inventory: "ORCL01\trunning\toratab,pmon\nORCL02\tstopped\toratab\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["stopped databases", "ORCL02", "oracle_common_allow_shared_home_partial=true knowingly"]
+      - name: a stopped database out of scope with the opt-in
+        inventory: "ORCL01\trunning\toratab,pmon\nORCL02\tstopped\toratab\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        partial: true
+        refused: false
+        warnings: ["stopped databases", "ORCL02", "proceeding because oracle_common_allow_shared_home_partial is true"]
+      - name: a running database out of scope with the opt-in
+        inventory: "ORCL01\trunning\toratab,pmon\nORCL02\trunning\tpmon\nORCL03\tstopped\toratab\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        partial: true
+        refused: true
+        refusals: ["running databases", "ORCL02"]
+        warnings: ["ORCL03"]
+      - name: SIDs compared without case
+        inventory: "orcl01\trunning\toratab\norcl02\tstopped\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home1 }}"}
+        refused: false
+      - name: a database in scope on another home
+        inventory: "ORCL01\trunning\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home2 }}"}
+        refused: true
+        refusals: ["ORCL02 (in oracle_common_patch_databases", "only databases of one home"]
+      - name: a database in scope on another home, report-only
+        inventory: "ORCL01\trunning\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home2 }}"}
+        report_only: true
+        refused: true
+        refusals: ["only databases of one home"]
+      - name: a database in scope whose home cannot be read
+        inventory: "ORCL01\trunning\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["the ORACLE_HOME of ORCL02 could not be read"]
+      - name: malformed listing
+        inventory: "ORCL01\trunning\toratab\nORCL02 running oratab\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["cannot be trusted", "ORCL02 running oratab"]
+      - name: malformed listing, report-only
+        inventory: "ORCL01\trunning\toratab\nORCL02 running oratab\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        report_only: true
+        refused: false
+        warnings: ["cannot be trusted"]
+      - name: listing without DATABASE_NAME
+        inventory: "ORCL02\tstopped\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home1 }}"}
+        refused: true
+        refusals: ["does not include ORCL01 itself"]
+      - name: empty listing
+        inventory: ""
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["does not include ORCL01 itself"]
+      - name: failed listing
+        inventory: ""
+        errors: ["home_inventory.bash /u01/x exited with rc 1: boom"]
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: true
+        refusals: ["could not be listed", "boom"]
+      - name: failed listing, report-only
+        inventory: ""
+        errors: ["home_inventory.bash /u01/x exited with rc 1: boom"]
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        report_only: true
+        refused: false
+        warnings: ["could not be listed"]
+      - name: running database out of scope, report-only
+        inventory: "ORCL01\trunning\toratab\nORCL02\trunning\tpmon\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        report_only: true
+        refused: false
+        warnings: ["running databases", "ORCL02"]
+      - name: one database listed twice (path as written and physical path), running in one listing
+        inventory: "ORCL01\trunning\toratab\nORCL02\tstopped\toratab\nORCL01\trunning\tpmon\nORCL02\trunning\tpmon\n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        partial: true
+        refused: true
+        refusals: ["running databases", "ORCL02"]
+        out_of_scope: [ORCL02]
+      - name: Windows line ends and blank lines
+        inventory: "ORCL01\trunning\toratab\r\n\r\n  \n"
+        scope: [ORCL01]
+        homes: {ORCL01: "{{ home1 }}"}
+        refused: false
+  tasks:
+    # --- 1. Decision rules ------------------------------------------------------------------------------------------
+    - name: Check each shared Oracle home case
+      ansible.builtin.assert:
+        that:
+          - (__oracle_common_shared_home_refusals | length > 0) == item.refused
+          - item.refusals | default([]) | reject('in', __oracle_common_shared_home_refusals | join('\n')) | list | length == 0
+          - item.warnings | default([]) | reject('in', __oracle_common_shared_home_warnings | join('\n')) | list | length == 0
+          - (item.warnings is defined) or (item.refused) or (__oracle_common_shared_home_warnings | length == 0)
+          - item.out_of_scope is not defined or (__oracle_common_home_out_of_scope | sort) == (item.out_of_scope | sort)
+        fail_msg: >-
+          case '{{ item.name }}': refused={{ __oracle_common_shared_home_refusals | length > 0 }} (expected {{ item.refused }});
+          refusals: {{ __oracle_common_shared_home_refusals }}; warnings: {{ __oracle_common_shared_home_warnings }};
+          out of scope: {{ __oracle_common_home_out_of_scope }}
+        quiet: true
+      vars:
+        __oracle_common_shared_home_inventory: "{{ item.inventory }}"
+        __oracle_common_shared_home_inventory_errors: "{{ item.errors | default([]) }}"
+        __oracle_common_shared_home_homes: "{{ item.homes }}"
+        __oracle_common_shared_home_scope: "{{ item.scope }}"
+        __oracle_common_shared_home_primary: "{{ item.scope | first }}"
+        __oracle_common_shared_home_report_only: "{{ item.report_only | default(false) }}"
+        oracle_common_allow_shared_home_partial: "{{ item.partial | default(false) }}"
+      loop: "{{ shared_home_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- 2. tasks/shared_home_decide.yml ----------------------------------------------------------------------------
+    - name: Refuse through tasks/shared_home_decide.yml
+      block:
+        - name: Reset the decision (sentinel)
+          ansible.builtin.set_fact:
+            oracle_common_shared_home: {refusals: [__decide_not_run__]}
+            __oracle_common_shared_home_inventory: "{{ listing_orcl02_running }}"
+            __oracle_common_shared_home_inventory_errors: []
+            __oracle_common_shared_home_homes: {ORCL01: "{{ home1 }}"}
+            __oracle_common_shared_home_scope: [ORCL01]
+            __oracle_common_shared_home_primary: ORCL01
+            __oracle_common_shared_home_report_only: false
+        - name: Run tasks/shared_home_decide.yml (must refuse)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: shared_home_decide
+        - name: Fail the test (the refusal did not happen)
+          ansible.builtin.fail:
+            msg: "shared_home_decide.yml accepted a home with a running database out of scope"
+      rescue:
+        - name: Check the refusal
+          ansible.builtin.assert:
+            that:
+              - "'__decide_not_run__' not in oracle_common_shared_home.refusals"
+              - oracle_common_shared_home.out_of_scope == ['ORCL02']
+              - "'Refusing to patch the Oracle home ' ~ home1 in ansible_failed_result.msg | default('')"
+              - "'nothing has been stopped' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected outcome: {{ ansible_failed_result.msg | default('') }} / {{ oracle_common_shared_home }}"
+
+    - name: Reset the decision (sentinel)
+      ansible.builtin.set_fact:
+        oracle_common_shared_home: {refusals: [__decide_not_run__]}
+        __oracle_common_shared_home_inventory: "{{ listing_orcl02_stopped }}"
+        __oracle_common_shared_home_scope: [ORCL01, ORCL02]
+        __oracle_common_shared_home_homes: {ORCL01: "{{ home1 }}", ORCL02: "{{ home1 }}"}
+
+    - name: Accept through tasks/shared_home_decide.yml
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: shared_home_decide
+
+    - name: Check the acceptance
+      ansible.builtin.assert:
+        that:
+          - oracle_common_shared_home.refusals == []
+          - oracle_common_shared_home.warnings == []
+          - oracle_common_shared_home.home == home1
+          - oracle_common_shared_home.databases == ['ORCL01', 'ORCL02']
+          - oracle_common_shared_home.running == ['ORCL01']
+        fail_msg: "unexpected decision: {{ oracle_common_shared_home }}"
+
+    # --- 3. tasks/shared_home.yml end to end ------------------------------------------------------------------------
+    - name: Run tasks/shared_home.yml against stub environment files and a stub home_inventory.bash
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: safety_shared_home.
+          register: shared_home_tmp
+
+        - name: Create the stub directories
+          ansible.builtin.file:
+            path: "{{ shared_home_tmp.path }}/{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: [scripts/oracle_database_patch_role, env, home1, home2]
+
+        # Prints the file named by ORA_ORATAB (the stubbed listing) and logs its argument (the home it was asked for).
+        - name: Create the stub home_inventory.bash
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/scripts/oracle_database_patch_role/home_inventory.bash"
+            mode: "0700"
+            content: |
+              #!/bin/sh
+              printf '%s\n' "$1" >> "$(dirname "$0")/args.log"
+              printf '%s\n' "$ORA_ENV_GLOB" >> "$(dirname "$0")/glob.log"
+              [ -r "$ORA_ORATAB" ] || exit 1
+              cat "$ORA_ORATAB"
+
+        - name: Create the stub environment files
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/env/{{ item.sid }}.env"
+            mode: "0600"
+            content: |
+              # comment line, and a command whose output must be ignored
+              echo "setting {{ item.sid }}"
+              export ORACLE_SID={{ item.sid }}
+              export ORACLE_HOME={{ shared_home_tmp.path }}/{{ item.home }}/
+          loop:
+            - {sid: ORCL01, home: home1}
+            - {sid: ORCL02, home: home1}
+            - {sid: ORCL03, home: home2}
+
+        - name: Set the end-to-end inputs
+          ansible.builtin.set_fact:
+            oracle_common_bash_path: /bin/bash
+            oracle_common_env_glob: "{{ shared_home_tmp.path }}/env/*.env"
+            oracle_common_allow_shared_home_partial: false
+            __oracle_common_shared_home_report_only: false
+            shared_home_e2e_run:
+              primary: ORCL01
+              script_dir: "{{ shared_home_tmp.path }}/scripts"
+              databases:
+                ORCL01: {env_file: "{{ shared_home_tmp.path }}/env/ORCL01.env", dbowner: oracle}
+                ORCL02: {env_file: "{{ shared_home_tmp.path }}/env/ORCL02.env", dbowner: oracle}
+                ORCL03: {env_file: "{{ shared_home_tmp.path }}/env/ORCL03.env", dbowner: oracle}
+                ORCL04: {env_file: "{{ shared_home_tmp.path }}/env/ORCL04.env", dbowner: oracle}
+
+        # E2E 1: ORCL01 and ORCL02 share home1, both in scope: accepted.
+        - name: Stub the listing of home1 (both databases running)
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/oratab"
+            mode: "0600"
+            content: "{{ listing_both_running }}"
+
+        - name: Set the scope (ORCL01, ORCL02)
+          ansible.builtin.set_fact:
+            oracle_common_oratab: "{{ shared_home_tmp.path }}/oratab"
+            oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+            oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02']}) }}"
+
+        - name: Run tasks/shared_home.yml (both databases in scope)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: shared_home
+
+        - name: Read the homes home_inventory.bash was asked for
+          ansible.builtin.slurp:
+            src: "{{ shared_home_tmp.path }}/scripts/oracle_database_patch_role/args.log"
+          register: shared_home_args
+
+        - name: Read the environment file glob home_inventory.bash received
+          ansible.builtin.slurp:
+            src: "{{ shared_home_tmp.path }}/scripts/oracle_database_patch_role/glob.log"
+          register: shared_home_glob
+
+        - name: Check the acceptance (end to end)
+          ansible.builtin.assert:
+            that:
+              - oracle_common_shared_home.refusals == []
+              - oracle_common_shared_home.databases == ['ORCL01', 'ORCL02']
+              # The trailing slash of the environment file is removed; the physical path is used when it differs.
+              - __oracle_common_shared_home_lookups.ORCL01.raw == shared_home_tmp.path ~ '/home1'
+              - __oracle_common_shared_home_lookups.ORCL01.home is search('/home1\Z')
+              - __oracle_common_shared_home_lookups.ORCL02.home == __oracle_common_shared_home_lookups.ORCL01.home
+              - (shared_home_tmp.path ~ '/home1') in (shared_home_args.content | b64decode).splitlines()
+              - (shared_home_glob.content | b64decode).splitlines() | unique == [shared_home_tmp.path ~ '/env/*.env']
+            fail_msg: >-
+              unexpected: {{ oracle_common_shared_home }} / lookups {{ __oracle_common_shared_home_lookups }} /
+              args {{ shared_home_args.content | b64decode }}
+
+        # E2E 2: only ORCL01 in scope while ORCL02 (same home) runs: refused.
+        - name: Refuse a running database out of scope (end to end)
+          block:
+            - name: Set the scope (ORCL01 only)
+              ansible.builtin.set_fact:
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01']}) }}"
+            - name: Run tasks/shared_home.yml (ORCL01 only, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted a home with a running database out of scope"
+          rescue:
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - oracle_common_shared_home.out_of_scope == ['ORCL02']
+                  - "'running databases' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ oracle_common_shared_home }}"
+
+        # E2E 3: ORCL03 (home2) in scope with ORCL01 (home1): refused, even report-only.
+        - name: Refuse a database in scope on another home (end to end, report-only)
+          block:
+            - name: Set the scope (ORCL01, ORCL03)
+              ansible.builtin.set_fact:
+                __oracle_common_shared_home_report_only: true
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL03']}) }}"
+            - name: Run tasks/shared_home.yml (two homes, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted databases of two homes"
+          rescue:
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'ORCL03 (in oracle_common_patch_databases' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        # E2E 4: ORCL04 has no environment file: refused.
+        - name: Refuse a database in scope without an environment file (end to end)
+          block:
+            - name: Set the scope (ORCL01, ORCL04)
+              ansible.builtin.set_fact:
+                __oracle_common_shared_home_report_only: false
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL04']}) }}"
+            - name: Run tasks/shared_home.yml (missing environment file, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted a database whose ORACLE_HOME could not be read"
+          rescue:
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'the ORACLE_HOME of ORCL04 could not be read' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        # E2E 5: home_inventory.bash fails: refused; report-only: accepted with a warning.
+        - name: Make the stub home_inventory.bash fail
+          ansible.builtin.file:
+            path: "{{ shared_home_tmp.path }}/oratab"
+            state: absent
+
+        - name: Refuse a home that cannot be listed (end to end)
+          block:
+            - name: Set the scope (ORCL01, ORCL02)
+              ansible.builtin.set_fact:
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02']}) }}"
+            - name: Run tasks/shared_home.yml (failed listing, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted a home it could not list"
+          rescue:
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'could not be listed' in ansible_failed_result.msg | default('')"
+                  - "'exited with rc 1' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        - name: Report a home that cannot be listed (end to end, report-only)
+          ansible.builtin.set_fact:
+            __oracle_common_shared_home_report_only: true
+            oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+
+        - name: Run tasks/shared_home.yml (failed listing, report-only)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: shared_home
+
+        - name: Check the report-only outcome (end to end)
+          ansible.builtin.assert:
+            that:
+              - oracle_common_shared_home.refusals == []
+              - oracle_common_shared_home.warnings | select('search', 'could not be listed') | list | length == 1
+            fail_msg: "unexpected: {{ oracle_common_shared_home }}"
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ shared_home_tmp.path }}"
+            state: absent
+          when: shared_home_tmp.path is defined

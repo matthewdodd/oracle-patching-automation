@@ -1,8 +1,12 @@
 ---
-## This script stops the listener
+## This script stops the listener. The output is logged to <remote_output_directory>/log.<script>.<YYYY.MM.DD>, as
+## before, but the script's own exit code is kept (it was hidden by the pipe into tee): 0 = stopped, 4 = already
+## stopped (accepted), anything else = the listener could not be stopped (fails, so the home is not patched while its
+## listener runs).
 
-- name: copy listener script to {{ server_name }}
-  copy:
+- name: copy listener script to {{ server_name }}  # noqa: name[casing] - original task name
+  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
+  copy:  # noqa: fqcn[action-core]
     src: "{{ stop_listener_script }}"
     dest: "{{ remote_script_directory }}/{{ stop_listener_script }}"
     mode: "{{ oracle_common_modes.script }}"
@@ -14,20 +18,27 @@
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   become_method: ansible.builtin.sudo
 
-- name: Stop listener {{ sid_server_dict[ORACLE_SID].dbListener }} in {{ ORACLE_SID }} on {{ server_name }}
-  vars:
-    LISTENER: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
-  shell:
-    executable: /usr/bin/bash
-    cmd: >
-      {{ remote_script_directory }}/listener_ctl.bash stop {{ ORACLE_SID }} {{ LISTENER }}
-      2>&1 | tee {{ remote_output_directory }}/log.{{ stop_listener_script }}.`date +"%Y.%m.%d"`
+- name: Stop the database listener {{ sid_server_dict[ORACLE_SID].dbListener ~ ' of ' ~ ORACLE_SID ~ ' on ' ~ server_name }}
+  ansible.builtin.command:
+    argv:
+      - "{{ oracle_common_bash_path | default('/usr/bin/bash') }}"
+      - -c
+      # Static script; the values are passed as positional parameters, never interpolated into it.
+      - set -o pipefail; "$1" stop "$2" "$3" 2>&1 | tee "$4.$(date +%Y.%m.%d)"
+      - stop_listener
+      - "{{ remote_script_directory }}/{{ stop_listener_script }}"
+      - "{{ ORACLE_SID }}"
+      - "{{ sid_server_dict[ORACLE_SID].dbListener }}"
+      - "{{ remote_output_directory }}/log.{{ stop_listener_script }}"
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
-  register: listener_stop_status
+  register: standalone_control_role_listener_stop_status
+  changed_when: standalone_control_role_listener_stop_status.rc == 0
+  failed_when: standalone_control_role_listener_stop_status.rc not in [0, 4]
   become: true
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
+  become_method: ansible.builtin.sudo
 
-- name: print listener_stop_status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ listener_stop_status.stdout_lines }}"
+- name: print listener_stop_status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_listener_stop_status.stdout_lines }}"

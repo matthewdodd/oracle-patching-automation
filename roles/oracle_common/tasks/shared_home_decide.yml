@@ -1,0 +1,47 @@
+---
+# Decides whether the ORACLE_HOME of DATABASE_NAME may be patched by this run. Pure logic on the controller's view of
+# the facts gathered by tasks/shared_home.yml (or given by a test): the inputs and the rules are the
+# __oracle_common_shared_home_* and __oracle_common_home_* expressions of defaults/main/safety.yml. Sets
+# oracle_common_shared_home: {home, databases, running, out_of_scope, refusals, warnings} and refuses (fails) when
+# refusals is not empty. Refused, before anything is stopped:
+#   - a database in scope whose ORACLE_HOME cannot be read, or that uses another home (always);
+#   - a home that cannot be listed reliably (home_inventory.bash failed, printed malformed lines, or did not list
+#     DATABASE_NAME itself);
+#   - a running database on the home that is not in scope;
+#   - a stopped database on the home that is not in scope, unless oracle_common_allow_shared_home_partial is true.
+# With __oracle_common_shared_home_report_only (the prerequisite playbook) only the first rule refuses; the others are
+# reported as warnings.
+- name: Decide whether the Oracle home may be patched
+  ansible.builtin.set_fact:
+    oracle_common_shared_home:
+      home: "{{ __oracle_common_shared_home_primary_home }}"
+      databases: "{{ __oracle_common_home_sids }}"
+      running: "{{ __oracle_common_home_running_sids }}"
+      out_of_scope: "{{ __oracle_common_home_out_of_scope }}"
+      refusals: "{{ __oracle_common_shared_home_refusals }}"
+      warnings: "{{ __oracle_common_shared_home_warnings }}"
+
+- name: Show the databases that use the Oracle home
+  ansible.builtin.debug:
+    msg: >-
+      Oracle home {{ oracle_common_shared_home.home or '(unknown)' }}: used by
+      {{ oracle_common_shared_home.databases | join(', ') or 'no database found' }}
+      (running: {{ oracle_common_shared_home.running | join(', ') or 'none' }}); in scope of this run:
+      {{ __oracle_common_shared_home_scope | default([]) | join(', ') }}
+
+- name: Report the shared Oracle home warnings
+  ansible.builtin.debug:
+    msg: "WARNING: {{ __oracle_common_warning }}"
+  loop: "{{ oracle_common_shared_home.warnings }}"
+  loop_control:
+    loop_var: __oracle_common_warning
+
+- name: Refuse to patch an Oracle home used by databases out of scope
+  ansible.builtin.assert:
+    that: oracle_common_shared_home.refusals | length == 0
+    fail_msg: >-
+      Refusing to patch the Oracle home {{ oracle_common_shared_home.home or 'of ' ~ (__oracle_common_shared_home_primary | default('')) }}
+      (nothing has been stopped or changed): {{ oracle_common_shared_home.refusals | join(' | ') }}
+    success_msg: >-
+      Every database that uses the Oracle home {{ oracle_common_shared_home.home }} is in scope{{ '' if (oracle_common_shared_home.out_of_scope | length == 0)
+      else ' (see the warnings above)' }}

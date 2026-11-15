@@ -1,0 +1,18 @@
+---
+# Validates the patch scope (oracle_common_patch_databases, alias oracle_patch_databases) and the safety settings of
+# defaults/main/safety.yml before anything changes: every problem is reported at once. Needs no facts, so the
+# playbooks run it on localhost right after tasks/validate_job.yml, and tasks/preflight_work_dirs.yml runs it again on
+# every target (inventory values may differ per host). The checks are __oracle_common_preflight_scope_checks
+# (defaults/main/safety.yml); paths use the shared path rule (__oracle_common_invalid_path_names).
+- name: Collect the patch scope and safety setting errors
+  ansible.builtin.set_fact:
+    __oracle_common_preflight_scope_errors: >-
+      {{ __oracle_common_preflight_scope_checks | selectattr('failed') | map(attribute='msg') | list }}
+  vars:
+    __oracle_common_paths: "{{ __oracle_common_preflight_scope_paths }}"
+
+- name: Validate the patch scope and the safety settings
+  ansible.builtin.assert:
+    that: __oracle_common_preflight_scope_errors | length == 0
+    fail_msg: "Invalid patch scope or safety settings: {{ __oracle_common_preflight_scope_errors | join(' | ') }}"
+    success_msg: "Databases in scope of this run: {{ __oracle_common_scope | join(', ') }}"

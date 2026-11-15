@@ -1,0 +1,364 @@
+---
+# Patch scope, per-run working directories, patch timeout and script environment regression test (roles/oracle_common
+# tasks/preflight_scope.yml, preflight_work_dirs.yml, preflight_script_env.yml and defaults/main/safety.yml). Runs on the
+# controller only and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_scope.yml
+#
+# 1. Defaults and aliases: one database in scope ([DATABASE_NAME], the original behaviour), timeout 14400 s polled every
+#    120 s up to 120 times (the polling window equals the timeout), per-run directories on, already-applied skip,
+#    no partial shared-home opt-in; every oracle_patch_* alias feeds its oracle_common_* setting.
+# 2. Scope and safety-setting validation, one assertion per case (anchored patterns, "<CHANGE_ME>" rejected, polling
+#    window within the timeout, paths without '..').
+# 3. tasks/preflight_scope.yml accepts and refuses.
+# 4. tasks/preflight_work_dirs.yml: per-run directories carry "_<run id>", other databases work in <output>/<SID>, each
+#    database has its own environment file, the scripts get ORA_ENV_FILE / ORA_WORK_DIR / ORA_ORATAB / ORA_ENV_GLOB (and
+#    ORA_OPATCH_BACKUP_DIR when set); fixed names with oracle_common_unique_work_dirs false; explicit
+#    remote_*_directory used exactly; the generated run id is valid and unique; the staging directory gets the run id.
+# 5. tasks/preflight_script_env.yml adds ORA_DB_RU_PATTERN, ORA_JVM_RU_PATTERN, ORA_JVM_MIN_MATCHES and
+#    ORA_DATAPATCH_STARTUP_MODE of the Oracle version.
+- name: Patch scope and working directory regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/defaults/main/safety.yml
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    DATABASE_NAME: ORCL01  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    sid_server_dict:
+      ORCL01: {dbowner: oracle, pdb: orclpdb1, dbvip: dbhost01-vip.example.com, dbListener: LISTENER_ORCL01, pdbListener: LISTENER_ORCLPDB1}
+      ORCL02: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_ORCL02, pdbListener: LISTENER_ORCL02}
+      ORCL03: {dbowner: oracle2, pdb: "", dbvip: "", dbListener: LISTENER_ORCL03, pdbListener: LISTENER_ORCL03}
+      ORCL04: {dbowner: oracle, pdb: "bad pdb", dbvip: "", dbListener: LISTENER_ORCL04, pdbListener: LISTENER_ORCL04}
+    scope_cases:
+      - {name: default scope, set: {}, scope: [ORCL01]}
+      - {name: list scope, set: {oracle_common_patch_databases: [ORCL01, ORCL02]}, scope: [ORCL01, ORCL02]}
+      - {name: string scope (comma), set: {oracle_common_patch_databases: "ORCL01,ORCL02"}, scope: [ORCL01, ORCL02]}
+      - {name: string scope (spaces, DATABASE_NAME last), set: {oracle_common_patch_databases: " ORCL02  ORCL01 "}, scope: [ORCL01, ORCL02]}
+      - {name: DATABASE_NAME missing, set: {oracle_common_patch_databases: [ORCL02]}, errors: ["must include DATABASE_NAME"]}
+      - {name: empty list, set: {oracle_common_patch_databases: []}, errors: ["must include DATABASE_NAME"]}
+      - name: duplicate without case
+        set: {oracle_common_patch_databases: [ORCL01, orcl01]}
+        errors: ["more than once", "sid_server_dict has no entry for orcl01"]
+      - name: not in sid_server_dict
+        set: {oracle_common_patch_databases: [ORCL01, ORCL09]}
+        errors: ["sid_server_dict has no entry for ORCL09"]
+      - name: shell characters
+        set: {oracle_common_patch_databases: ["ORCL01", "ORCL02;id"]}
+        errors: ["every entry must be an ORACLE_SID", "ORCL02;id", "sid_server_dict has no entry"]
+      - name: trailing newline
+        set: {oracle_common_patch_databases: ["ORCL01", "ORCL02\n"]}
+        errors: ["every entry must be an ORACLE_SID", "sid_server_dict has no entry"]
+      - name: different database owners
+        set: {oracle_common_patch_databases: [ORCL01, ORCL03]}
+        errors: ["must have the same dbowner", "oracle, oracle2"]
+      - name: invalid listener or PDB name of another database
+        set: {oracle_common_patch_databases: [ORCL01, ORCL04]}
+        errors: ["pdb, dbListener and pdbListener of every database in scope"]
+      - {name: dictionary scope, set: {oracle_common_patch_databases: {ORCL01: 1}}, errors: ["must be a list of ORACLE_SIDs", "must include DATABASE_NAME"]}
+      - name: placeholder scope
+        set: {oracle_common_patch_databases: "<CHANGE_ME>"}
+        errors: ["still contains the placeholder", "every entry must be an ORACLE_SID", "must include DATABASE_NAME", "sid_server_dict has no entry"]
+      - name: non-boolean toggles
+        set: {oracle_common_allow_shared_home_partial: maybe, oracle_common_unique_work_dirs: "2"}
+        errors: ["must be true or false"]
+      - {name: legacy boolean strings, set: {oracle_common_fail_when_already_applied: "yes", oracle_common_unique_work_dirs: "false"}, scope: [ORCL01]}
+      - {name: invalid run id, set: {oracle_common_run_id: "../x"}, errors: ["oracle_common_run_id"]}
+      - {name: run id with a trailing newline, set: {oracle_common_run_id: "r1\n"}, errors: ["oracle_common_run_id"]}
+      - {name: valid run id, set: {oracle_common_run_id: "4711_change-1"}, scope: [ORCL01]}
+      - name: shorter timeout, polling derived
+        set: {oracle_common_patch_timeout: 4000, oracle_common_patch_poll_retries: "{{ 4000 // 120 }}"}
+        scope: [ORCL01]
+      - name: polling window longer than the timeout (the original 4000 s / 120 x 120 s)
+        set: {oracle_common_patch_timeout: 4000, oracle_common_patch_poll_delay: 120, oracle_common_patch_poll_retries: 120}
+        errors: ["must not exceed oracle_common_patch_timeout"]
+      - {name: zero timeout, set: {oracle_common_patch_timeout: 0, oracle_common_patch_poll_retries: 1}, errors: ["positive whole numbers"]}
+      - {name: text delay, set: {oracle_common_patch_poll_delay: "2m"}, errors: ["positive whole numbers"]}
+      - {name: relative oratab, set: {oracle_common_oratab: "etc/oratab"}, errors: ["oracle_common_oratab (alias oracle_patch_oratab)"]}
+      - {name: oratab with dot-dot, set: {oracle_common_oratab: "/etc/../tmp/oratab"}, errors: ["oracle_common_oratab"]}
+      - name: OPatch backup directory with dot-dot
+        set: {oracle_common_opatch_backup_dir: "/u01/backup/.."}
+        errors: ["oracle_common_opatch_backup_dir (alias oracle_patch_opatch_backup_dir)"]
+      - {name: OPatch backup directory, set: {oracle_common_opatch_backup_dir: "/u01/opatch_backup"}, scope: [ORCL01]}
+      - {name: environment glob with dot-dot, set: {oracle_common_env_glob: "/local/../*.env"}, errors: ["oracle_common_env_glob"]}
+      - {name: environment glob with a space, set: {oracle_common_env_glob: "/local/*.env /etc/*"}, errors: ["oracle_common_env_glob"]}
+      - {name: bash path with a semicolon, set: {oracle_common_bash_path: "/bin/bash;id"}, errors: ["oracle_common_bash_path"]}
+      - {name: Java components file with a path, set: {oracle_common_jvm_components_file: "../x.txt"}, errors: ["oracle_common_jvm_components_file"]}
+  tasks:
+    # --- 1. Defaults and aliases ------------------------------------------------------------------------------------
+    - name: Check the safety defaults
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_databases == ['ORCL01']
+          - __oracle_common_scope == ['ORCL01']
+          - oracle_common_patch_timeout | int == 14400
+          - oracle_common_patch_poll_delay | int == 120
+          - oracle_common_patch_poll_retries | int == 120
+          - (oracle_common_patch_poll_retries | int) * (oracle_common_patch_poll_delay | int) <= (oracle_common_patch_timeout | int)
+          - oracle_common_unique_work_dirs | bool
+          - not (oracle_common_fail_when_already_applied | bool)
+          - not (oracle_common_allow_shared_home_partial | bool)
+          - oracle_common_oratab == '/etc/oratab'
+          - oracle_common_env_glob == '/local/*.env'
+          - oracle_common_opatch_backup_dir == ''
+          - oracle_common_run_id == ''
+          - __oracle_common_preflight_scope_checks | selectattr('failed') | list | length == 0
+        fail_msg: "a safety default changed: see the failed assertion above"
+        quiet: true
+      vars:
+        __oracle_common_paths: "{{ __oracle_common_preflight_scope_paths }}"
+
+    - name: Check the oracle_patch_* aliases
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_databases == 'ORCL01,ORCL02'
+          - oracle_common_allow_shared_home_partial == true
+          - oracle_common_fail_when_already_applied == 'true'
+          - oracle_common_unique_work_dirs == false
+          - oracle_common_run_id == 'r42'
+          - oracle_common_oratab == '/var/opt/oracle/oratab'
+          - oracle_common_opatch_backup_dir == '/u01/opatch_backup'
+          - oracle_common_patch_timeout | int == 7200
+          - oracle_common_patch_poll_delay | int == 60
+          # Derived from the aliased timeout and delay.
+          - oracle_common_patch_poll_retries | int == 120
+        fail_msg: "an oracle_patch_* alias does not feed its oracle_common_* setting"
+        quiet: true
+      vars:
+        oracle_patch_databases: "ORCL01,ORCL02"
+        oracle_patch_allow_shared_home_partial: true
+        oracle_patch_fail_when_already_applied: "true"
+        oracle_patch_unique_work_dirs: false
+        oracle_patch_run_id: r42
+        oracle_patch_oratab: /var/opt/oracle/oratab
+        oracle_patch_opatch_backup_dir: /u01/opatch_backup
+        oracle_patch_apply_timeout: 7200
+        oracle_patch_poll_delay: 60
+
+    - name: Check oracle_patch_poll_retries
+      ansible.builtin.assert:
+        that: oracle_common_patch_poll_retries | int == 10
+        quiet: true
+      vars:
+        oracle_patch_poll_retries: 10
+
+    # --- 2. Validation rules ----------------------------------------------------------------------------------------
+    - name: Check each scope and safety setting case
+      ansible.builtin.assert:
+        that:
+          - (__scope_errors | length > 0) == (item.errors is defined)
+          - item.errors | default([]) | reject('in', __scope_errors | join('\n')) | list | length == 0
+          - item.scope is not defined or __oracle_common_scope == item.scope
+        fail_msg: "case '{{ item.name }}': errors {{ __scope_errors }}; scope {{ __oracle_common_scope }}"
+        quiet: true
+      vars:
+        __oracle_common_paths: "{{ __oracle_common_preflight_scope_paths }}"
+        __scope_errors: "{{ __oracle_common_preflight_scope_checks | selectattr('failed') | map(attribute='msg') | list }}"
+        # Each case sets its inputs as task variables (they win over the play's vars files) through this one variable.
+        oracle_common_patch_databases: "{{ item.set.oracle_common_patch_databases | default(['ORCL01']) }}"
+        oracle_common_allow_shared_home_partial: "{{ item.set.oracle_common_allow_shared_home_partial | default(false) }}"
+        oracle_common_fail_when_already_applied: "{{ item.set.oracle_common_fail_when_already_applied | default(false) }}"
+        oracle_common_unique_work_dirs: "{{ item.set.oracle_common_unique_work_dirs | default(true) }}"
+        oracle_common_run_id: "{{ item.set.oracle_common_run_id | default('') }}"
+        oracle_common_patch_timeout: "{{ item.set.oracle_common_patch_timeout | default(14400) }}"
+        oracle_common_patch_poll_delay: "{{ item.set.oracle_common_patch_poll_delay | default(120) }}"
+        oracle_common_patch_poll_retries: "{{ item.set.oracle_common_patch_poll_retries | default(120) }}"
+        oracle_common_oratab: "{{ item.set.oracle_common_oratab | default('/etc/oratab') }}"
+        oracle_common_opatch_backup_dir: "{{ item.set.oracle_common_opatch_backup_dir | default('') }}"
+        oracle_common_env_glob: "{{ item.set.oracle_common_env_glob | default('/local/*.env') }}"
+        oracle_common_bash_path: "{{ item.set.oracle_common_bash_path | default('/usr/bin/bash') }}"
+        oracle_common_jvm_components_file: "{{ item.set.oracle_common_jvm_components_file | default('db_jvm_components.txt') }}"
+      loop: "{{ scope_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- 3. tasks/preflight_scope.yml -------------------------------------------------------------------------------
+    - name: Reset the scope errors (sentinel)
+      ansible.builtin.set_fact:
+        __oracle_common_preflight_scope_errors: [__not_run__]
+
+    - name: Run tasks/preflight_scope.yml (valid two-database scope)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_scope
+        oracle_patch_databases: [ORCL01, ORCL02]
+
+    - name: Check the valid scope was accepted
+      ansible.builtin.assert:
+        that: __oracle_common_preflight_scope_errors == []
+        fail_msg: "unexpected errors: {{ __oracle_common_preflight_scope_errors }}"
+
+    - name: Refuse an invalid scope through tasks/preflight_scope.yml
+      block:
+        - name: Reset the scope errors (sentinel)
+          ansible.builtin.set_fact:
+            __oracle_common_preflight_scope_errors: [__not_run__]
+        - name: Run tasks/preflight_scope.yml (scope without DATABASE_NAME, polling window too long; must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_scope
+            oracle_patch_databases: [ORCL02]
+            oracle_patch_apply_timeout: 4000
+            oracle_patch_poll_retries: 120
+        - name: Fail the test (the invalid scope was accepted)
+          ansible.builtin.fail:
+            msg: "preflight_scope.yml accepted a scope without DATABASE_NAME"
+      rescue:
+        - name: Check the refusal lists every problem
+          ansible.builtin.assert:
+            that:
+              - "'__not_run__' not in __oracle_common_preflight_scope_errors"
+              - __oracle_common_preflight_scope_errors | length == 2
+              - "'must include DATABASE_NAME' in ansible_failed_result.msg | default('')"
+              - "'must not exceed oracle_common_patch_timeout' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+    # --- 4. tasks/preflight_work_dirs.yml ---------------------------------------------------------------------------
+    - name: Set the run id and a two-database scope
+      ansible.builtin.set_fact:
+        __oracle_common_run_id_value: r1
+        oracle_patch_databases: "ORCL02, ORCL01"
+        oracle_patch_opatch_backup_dir: /u01/opatch_backup
+
+    - name: Run tasks/preflight_work_dirs.yml (per-run directories)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+
+    - name: Check the per-run directories and the script environment
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.id == 'r1'
+          - oracle_common_run.unique == true
+          - oracle_common_run.primary == 'ORCL01'
+          - oracle_common_run.scope == ['ORCL01', 'ORCL02']
+          - oracle_common_run.script_dir == '/tmp/ora_ansible_scripts_ORCL01_r1'
+          - oracle_common_run.output_root == '/tmp/ora_db_patch_ORCL01_r1'
+          - oracle_common_run.databases.ORCL01 == expected_orcl01
+          - oracle_common_run.databases.ORCL02 == expected_orcl02
+          - oracle_common_script_env.ORCL01 == expected_env_orcl01
+          - oracle_common_script_env.ORCL02.ORA_ENV_FILE == '/local/ORCL02.env'
+          - oracle_common_script_env.ORCL02.ORA_WORK_DIR == '/tmp/ora_db_patch_ORCL01_r1/ORCL02'
+        fail_msg: "unexpected: {{ oracle_common_run }} / {{ oracle_common_script_env }}"
+      vars:
+        expected_orcl01: {env_file: /local/ORCL01.env, work_dir: /tmp/ora_db_patch_ORCL01_r1, dbowner: oracle}
+        expected_orcl02: {env_file: /local/ORCL02.env, work_dir: /tmp/ora_db_patch_ORCL01_r1/ORCL02, dbowner: oracle}
+        expected_env_orcl01:
+          ORA_ENV_FILE: /local/ORCL01.env
+          ORA_WORK_DIR: /tmp/ora_db_patch_ORCL01_r1
+          ORA_ORATAB: /etc/oratab
+          ORA_ENV_GLOB: /local/*.env
+          ORA_OPATCH_BACKUP_DIR: /u01/opatch_backup
+
+    - name: Check the staging directory of the run
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_run_staging_dir == '/u01/oracle/software_dir/19.0/jan26_ORCL01_r1'
+        fail_msg: "unexpected staging directory: {{ __oracle_common_run_staging_dir }}"
+      vars:
+        oracle_common_patch: {staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01}
+        oracle_common_patch_staging_dir: ""
+
+    - name: Check an explicit staging directory is used exactly
+      ansible.builtin.assert:
+        that: __oracle_common_run_staging_dir == '/u01/stage/mine'
+        fail_msg: "unexpected staging directory: {{ __oracle_common_run_staging_dir }}"
+      vars:
+        oracle_common_patch: {staging_dir: /u01/stage/mine}
+        oracle_common_patch_staging_dir: /u01/stage/mine
+
+    - name: Generate a first run id
+      ansible.builtin.set_fact:
+        first_generated_run_id: "{{ __oracle_common_run_id_generated }}"
+      vars:
+        oracle_common_run_id: ""
+        tower_job_id: 4711
+
+    - name: Check the generated run id
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_run_id_generated is match(__oracle_common_re_run_id)
+          - __oracle_common_run_id_generated is match('\A4711_[0-9]{8}T[0-9]{6}Z_[0-9a-f]{8}\Z')
+          # Two generations differ (random suffix), so two runs never share a directory.
+          - __oracle_common_run_id_generated != first_generated_run_id
+        fail_msg: "unexpected run id: {{ __oracle_common_run_id_generated }}"
+      vars:
+        oracle_common_run_id: ""
+        tower_job_id: 4711
+
+    - name: Run tasks/preflight_work_dirs.yml (fixed directory names)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        oracle_patch_unique_work_dirs: "false"
+        oracle_patch_databases: ORCL01
+        oracle_patch_opatch_backup_dir: ""
+
+    - name: Check the fixed directory names (the original paths)
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.unique == false
+          - oracle_common_run.script_dir == '/tmp/ora_ansible_scripts_ORCL01'
+          - oracle_common_run.databases.ORCL01.work_dir == '/tmp/ora_db_patch_ORCL01'
+          - oracle_common_script_env.ORCL01 == expected_env_fixed
+          - __oracle_common_run_staging_dir == '/u01/oracle/software_dir/19.0/jan26_ORCL01'
+        fail_msg: "unexpected: {{ oracle_common_run }} / {{ oracle_common_script_env }}"
+      vars:
+        expected_env_fixed: {ORA_ENV_FILE: /local/ORCL01.env, ORA_WORK_DIR: /tmp/ora_db_patch_ORCL01, ORA_ORATAB: /etc/oratab, ORA_ENV_GLOB: /local/*.env}
+        oracle_patch_unique_work_dirs: "false"
+        oracle_common_patch: {staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01}
+        oracle_common_patch_staging_dir: ""
+
+    - name: Refuse unsafe working directories through tasks/preflight_work_dirs.yml
+      block:
+        - name: Run tasks/preflight_work_dirs.yml (output directory with dot-dot; must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_work_dirs
+            remote_output_directory: /tmp/../etc
+        - name: Fail the test (the unsafe directory was accepted)
+          ansible.builtin.fail:
+            msg: "preflight_work_dirs.yml accepted /tmp/../etc"
+      rescue:
+        - name: Check the refusal
+          ansible.builtin.assert:
+            that: "'output directory (remote_output_directory)' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: Run tasks/preflight_work_dirs.yml (explicit remote_script_directory and remote_output_directory)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        remote_script_directory: /var/tmp/my_scripts
+        remote_output_directory: /var/tmp/my_output
+
+    - name: Check the explicit directories are used exactly (no run id)
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.script_dir == '/var/tmp/my_scripts'
+          - oracle_common_run.databases.ORCL01.work_dir == '/var/tmp/my_output'
+          - oracle_common_run.databases.ORCL02.work_dir == '/var/tmp/my_output/ORCL02'
+        fail_msg: "unexpected: {{ oracle_common_run }}"
+
+    # --- 5. tasks/preflight_script_env.yml --------------------------------------------------------------------------
+    - name: Add the README patterns of the Oracle version
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_script_env
+        oracle_common_oracle_version:
+          readme_ru_pattern: 'Database * Release Update'
+          readme_jvm_pattern: '\- Oracle JavaVM Component'
+          readme_jvm_min_matches: 2
+          datapatch_startup_mode: upgrade
+
+    - name: Check the Oracle version settings reach every database's script environment
+      ansible.builtin.assert:
+        that:
+          - oracle_common_script_env.ORCL01.ORA_DB_RU_PATTERN == 'Database * Release Update'
+          - oracle_common_script_env.ORCL02.ORA_JVM_RU_PATTERN == '\- Oracle JavaVM Component'
+          - oracle_common_script_env.ORCL02.ORA_WORK_DIR == '/var/tmp/my_output/ORCL02'
+          - oracle_common_script_env.ORCL01.ORA_JVM_MIN_MATCHES == '2'
+          - oracle_common_script_env.ORCL02.ORA_DATAPATCH_STARTUP_MODE == 'upgrade'
+        fail_msg: "unexpected: {{ oracle_common_script_env }}"

@@ -1,18 +1,24 @@
 ---
 # Inputs of oracle_database_patch_role. initialization_role (run first in the same play) sets the facts
-# listed below; the shared settings are documented in roles/oracle_common/meta/argument_specs.yml.
+# listed below; the shared settings are documented in roles/oracle_common/meta/argument_specs.yml and, for the
+# production-host safety settings (databases in scope, shared ORACLE_HOME, already-applied outcome, per-run
+# directories, patch timeout), in roles/oracle_common/defaults/main/safety.yml.
 argument_specs:
   main:
     short_description: Apply the staged patch (OPatch and datapatch) to the database home.
     description:
-      - Copies the patch scripts and runs database_patch.bash apply as the database owner (asynchronously).
-      - Uses the facts set by initialization_role (remote_script_directory, patch_folder_name) and
-        oracle_common_modes.script.
+      - Copies the patch scripts and, as the database owner (asynchronously, tasks/patch_step.yml), runs
+        database_patch.bash apply for one database in scope (the original behaviour), or, for several databases of
+        one ORACLE_HOME (oracle_common_patch_databases), apply_home once and datapatch for each database.
+      - Each step may run for oracle_common_patch_timeout seconds (alias oracle_patch_apply_timeout, default 14400)
+        and is polled every oracle_common_patch_poll_delay seconds up to oracle_common_patch_poll_retries times.
+      - Uses the facts set by initialization_role (remote_script_directory, patch_folder_name, oracle_common_run,
+        oracle_common_script_env) and oracle_common_modes.script.
     options:
       DATABASE_NAME:
         type: str
         required: true
-        description: ORACLE_SID of the database to patch.
+        description: ORACLE_SID of the database to patch (the first database in scope).
       sid_server_dict:
         type: dict
         required: true
@@ -20,11 +26,35 @@ argument_specs:
       target:
         type: str
         description: Target host list.
+      oracle_common_patch_databases:
+        type: raw
+        description: >-
+          Databases (ORACLE_SIDs) of the ORACLE_HOME patched together; a list or a comma or space separated string.
+          Alias oracle_patch_databases. Default [DATABASE_NAME].
+      oracle_patch_databases:
+        type: raw
+        description: Short alias of oracle_common_patch_databases.
+      oracle_common_patch_timeout:
+        type: raw
+        description: Seconds a patch step may run (alias oracle_patch_apply_timeout). Default 14400.
+      oracle_common_patch_poll_delay:
+        type: raw
+        description: Seconds between two checks of a patch step (alias oracle_patch_poll_delay). Default 120.
+      oracle_common_patch_poll_retries:
+        type: raw
+        description: >-
+          Number of checks (alias oracle_patch_poll_retries). Default timeout / delay; retries x delay may not exceed
+          the timeout.
   run_prereq:
     short_description: Download and stage the patch, then run the prerequisite checks.
     description:
-      - Downloads the patch bundle (copy_files_to_server.yml), runs the AIX 12.1 qopiprep fix, the patch status
-        check (already applied is reported as unneeded), the OPatch upgrade and conflict check, and utlrp.
+      - Downloads the patch bundle (copy_files_to_server.yml), then for every database in scope runs the AIX 12.1
+        qopiprep fix and the patch status check. oracle_common preflight_patch_status.yml decides; when there is
+        something to patch, the OPatch upgrade and conflict check run once for the home and utlrp for each database.
+      - A patch already applied in every database in scope sets oracle_common_patch_status.outcome to applied (the
+        playbooks then end the run successfully with the "unneeded" notification; with
+        oracle_common_fail_when_already_applied, alias oracle_patch_fail_when_already_applied, the run fails as
+        before). Applied in some databases only is refused.
     options:
       DATABASE_NAME:
         type: str
@@ -34,8 +64,16 @@ argument_specs:
         type: dict
         required: true
         description: Inventory dictionary of databases keyed by ORACLE_SID.
+      oracle_common_fail_when_already_applied:
+        type: raw
+        description: >-
+          true restores the original outcome for a patch already applied everywhere (the "unneeded" notification,
+          then the run fails). Alias oracle_patch_fail_when_already_applied. Default false (successful skip).
   copy_files_to_server:
     short_description: Download the patch bundle into the staging directory and extract it.
+    description:
+      - With per-run directories (oracle_common_unique_work_dirs, default true) the staging directory must not exist
+        yet; it is recorded in oracle_database_patch_role_created_paths so the cleanup removes it.
     options:
       artf_file_name:
         type: str
@@ -44,5 +82,9 @@ argument_specs:
         type: str
         description: Staging directory (set by run_prereq.yml from patch_folder_name).
   clean_files_from_server:
-    short_description: Remove the staged patch and the copied scripts (used after a run and in failure handling).
+    short_description: Remove the staging and script directories this run created (used after a run and in failure handling).
+    description:
+      - Removes only the paths recorded in initialization_role_created_paths and oracle_database_patch_role_created_paths
+        (never another run's or another database's). Logs in the working directories are kept. A path that cannot be
+        removed is reported as a WARNING.
     options: {}

@@ -1,0 +1,365 @@
+---
+# Production-host safety: which databases a run patches, the shared ORACLE_HOME check, the "already applied"
+# outcome, per-run working directories, the patch timeout and the inputs the patch scripts receive through their
+# environment. Inputs first; every input has a short oracle_patch_* alias. The "__oracle_common_*" values at the
+# end of this file are internal expressions used by tasks/preflight_*.yml and tasks/shared_home*.yml (and checked
+# directly by tests/safety_*.yml); they are not inputs: do not override them.
+
+# --- Databases in scope -----------------------------------------------------------------------------------------
+# ORACLE_SIDs patched by this run, all on the ORACLE_HOME of DATABASE_NAME: a list, or a comma or space separated
+# string (an AAP survey text field). It must include DATABASE_NAME, and every SID needs a sid_server_dict entry with
+# the same dbowner. Default: [DATABASE_NAME], one database (the original behaviour, unchanged: database_patch.bash
+# apply). With several databases the run stops all of them (and their listeners), applies the patch to the home
+# once (database_patch.bash apply_home), runs datapatch in each (database_patch.bash datapatch) and starts them all.
+# Alias: oracle_patch_databases.
+oracle_common_patch_databases: "{{ oracle_patch_databases | default([DATABASE_NAME] if DATABASE_NAME is defined else []) }}"
+
+# --- Shared ORACLE_HOME check -----------------------------------------------------------------------------------
+# Before anything is stopped, every database that uses the ORACLE_HOME of DATABASE_NAME is listed (home_inventory.bash:
+# oratab entries, running ora_pmon_<SID> processes of that home and environment files naming it) and the full patch
+# run refuses unless all of them are in oracle_common_patch_databases (the prerequisite playbook only reports them).
+# Opt-in, knowingly: also proceed when every database outside the scope is stopped (for example a stale oratab entry
+# or a decommissioned database). Those databases do not get datapatch and need it when they are next started. A
+# running database outside the scope is always refused (OPatch cannot patch a home that is in use, and stopping a
+# database nobody asked to stop is never done). Alias: oracle_patch_allow_shared_home_partial.
+oracle_common_allow_shared_home_partial: "{{ oracle_patch_allow_shared_home_partial | default(false) }}"
+# oratab read by home_inventory.bash and the patch scripts (ORA_ORATAB; /etc/oratab on Linux and AIX).
+# Alias: oracle_patch_oratab.
+oracle_common_oratab: "{{ oracle_patch_oratab | default('/etc/oratab') }}"
+# Environment files home_inventory.bash reads for their ORACLE_HOME (ORA_ENV_GLOB).
+oracle_common_env_glob: "{{ oracle_common_env_dir }}/*.env"
+# Shell that reads ORACLE_HOME from an environment file (the bundled scripts use /usr/bin/bash).
+oracle_common_bash_path: /usr/bin/bash
+
+# --- Patch already applied --------------------------------------------------------------------------------------
+# A patch already applied in every database in scope (database_patch.bash status exit code 2) ends the run
+# successfully with the "unneeded" notification, without stopping anything. true restores the original outcome: the
+# same notification, then the run fails. Alias: oracle_patch_fail_when_already_applied.
+oracle_common_fail_when_already_applied: "{{ oracle_patch_fail_when_already_applied | default(false) }}"
+
+# --- Working directories ----------------------------------------------------------------------------------------
+# true: every run works in its own directories: the configured script and output directories
+# (oracle_common_remote_script_directory, oracle_common_remote_output_directory) and the patch staging directory with
+# "_<run id>" appended, created fresh by this run (a path that already exists is refused) and removed by the cleanup
+# only because this run created it. Further databases in scope work in <output directory>/<SID>. false: the original
+# fixed names, removed and re-created at the start of a run. remote_script_directory, remote_output_directory and
+# patch_folder_name (or oracle_common_patch_staging_dir) given explicitly are always used exactly as given.
+# Alias: oracle_patch_unique_work_dirs.
+oracle_common_unique_work_dirs: "{{ oracle_patch_unique_work_dirs | default(true) }}"
+# Run id appended to the working directories: a letter or digit, then letters, digits, _ or -, up to 64 characters.
+# Empty: generated once per host (the AAP job id when there is one, the UTC time and a random suffix).
+# Alias: oracle_patch_run_id.
+oracle_common_run_id: "{{ oracle_patch_run_id | default('') }}"
+# Where database_patch.bash moves the previous OPatch when it upgrades OPatch (ORA_OPATCH_BACKUP_DIR; the old OPatch is
+# kept, never deleted). Empty: the script default, $ORACLE_HOME/OPatch.bak.<timestamp>.
+# Alias: oracle_patch_opatch_backup_dir.
+oracle_common_opatch_backup_dir: "{{ oracle_patch_opatch_backup_dir | default('') }}"
+# File the status check writes into the working directory of each database, listing its Java components. With several
+# databases, one whose list mentions Java applies the patch to the home, so the OJVM patch reaches the home.
+oracle_common_jvm_components_file: db_jvm_components.txt
+
+# --- Patch timeout ----------------------------------------------------------------------------------------------
+# Seconds a patch step (database_patch.bash apply, apply_home or datapatch) may run (the original allowed 4000 s but
+# polled for up to 14400 s, so long applies were killed mid-patch). Alias: oracle_patch_apply_timeout.
+oracle_common_patch_timeout: "{{ oracle_patch_apply_timeout | default(14400) }}"
+# Seconds between two checks of a running patch step (the original: 120). Alias: oracle_patch_poll_delay.
+oracle_common_patch_poll_delay: "{{ oracle_patch_poll_delay | default(120) }}"
+# Number of checks. Default: timeout / delay (120), so the polling window (retries x delay) never exceeds the timeout;
+# a larger value is rejected. Alias: oracle_patch_poll_retries.
+oracle_common_patch_poll_retries: >-
+  {{ oracle_patch_poll_retries | default((oracle_common_patch_timeout | int) // ([oracle_common_patch_poll_delay | int, 1] | max)) }}
+
+# ================================================================================================================
+# Internal expressions (not inputs). Every pattern is anchored with \A ... \Z.
+# ================================================================================================================
+__oracle_common_re_run_id: '\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z'
+__oracle_common_re_uint: '\A[0-9]+\Z'
+# Glob of environment files: an absolute path of safe characters plus the glob characters * and ?.
+__oracle_common_re_env_glob: '\A/[A-Za-z0-9._/*?-]*\Z'
+__oracle_common_re_blank: '\A\s*\Z'
+# One home_inventory.bash line: <SID><TAB><running|stopped><TAB><sources>.
+__oracle_common_re_inventory_line: '\A(\S+)\t(running|stopped)\t(\S*)\Z'
+
+# --- Scope (tasks/preflight_scope.yml) ---------------------------------------------------------------------------
+__oracle_common_scope_type_ok: >-
+  {{ oracle_common_patch_databases is string
+     or (oracle_common_patch_databases is iterable and oracle_common_patch_databases is not mapping) }}
+# The SIDs as given (a string is split on commas and white space).
+__oracle_common_scope_list: >-
+  {{ ((oracle_common_patch_databases | replace(',', ' ')).split() if oracle_common_patch_databases is string
+      else (oracle_common_patch_databases | map('string') | list))
+     if __oracle_common_scope_type_ok else [] }}
+# The scope in run order: DATABASE_NAME first, then the others as given.
+__oracle_common_scope: >-
+  {{ [DATABASE_NAME | default('') | string]
+     + (__oracle_common_scope_list | reject('equalto', DATABASE_NAME | default('') | string) | unique | list) }}
+__oracle_common_scope_entries: >-
+  {{ __oracle_common_scope | select('in', sid_server_dict | default({})) | map('extract', sid_server_dict | default({})) | list }}
+__oracle_common_scope_owners: >-
+  {{ __oracle_common_scope_entries | select('mapping') | map(attribute='dbowner', default='') | map('string') | unique | list }}
+# Paths checked with the shared path rule (tasks/preflight_scope.yml passes them as __oracle_common_paths).
+__oracle_common_preflight_scope_paths: >-
+  {{ {'oracle_common_oratab (alias oracle_patch_oratab)': oracle_common_oratab,
+      'oracle_common_bash_path': oracle_common_bash_path}
+     | combine({'oracle_common_opatch_backup_dir (alias oracle_patch_opatch_backup_dir)': oracle_common_opatch_backup_dir}
+               if (oracle_common_opatch_backup_dir | string | length > 0) else {}) }}
+__oracle_common_preflight_scope_checks:
+  - failed: "{{ not __oracle_common_scope_type_ok }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): must be a list of ORACLE_SIDs or a comma or space
+      separated string; got '{{ oracle_common_patch_databases }}'
+  - failed: "{{ __oracle_common_scope_list | reject('match', __oracle_common_re_sid) | list | length > 0 }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): every entry must be an ORACLE_SID (a letter, then up
+      to 29 letters, digits or underscores); invalid: {{ __oracle_common_scope_list | reject('match', __oracle_common_re_sid) | list | join(', ') }}
+  - failed: "{{ (DATABASE_NAME | default('') | string) not in __oracle_common_scope_list }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): must include DATABASE_NAME
+      '{{ DATABASE_NAME | default('') }}'; got {{ __oracle_common_scope_list | join(', ') }}
+  - failed: >-
+      {{ (__oracle_common_scope_list | map('lower') | list | length) != (__oracle_common_scope_list | map('lower') | unique | list | length) }}
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): lists a database more than once (ORACLE_SIDs are
+      compared without case); got {{ __oracle_common_scope_list | join(', ') }}
+  - failed: "{{ sid_server_dict is mapping and __oracle_common_scope | reject('in', sid_server_dict) | list | length > 0 }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): sid_server_dict has no entry for
+      {{ __oracle_common_scope | reject('in', sid_server_dict | default({})) | list | join(', ') }}
+  - failed: "{{ __oracle_common_scope_entries | reject('mapping') | list | length > 0 }}"
+    msg: "sid_server_dict: the entry of every database in scope must be a dictionary (dbowner, pdb, dbvip, dbListener, pdbListener)"
+  - failed: >-
+      {{ __oracle_common_scope_entries | select('mapping') | map(attribute='dbowner', default='') | map('string')
+         | reject('match', __oracle_common_re_posix_name) | list | length > 0 }}
+    msg: "sid_server_dict: the dbowner of every database in scope must be a POSIX user name"
+  - failed: >-
+      {{ __oracle_common_scope_entries | select('mapping')
+         | map('dict2items') | flatten | selectattr('key', 'in', ['pdb', 'dbListener', 'pdbListener'])
+         | map(attribute='value') | map('string') | reject('equalto', '')
+         | reject('match', __oracle_common_re_oracle_name) | list | length > 0 }}
+    msg: >-
+      sid_server_dict: pdb, dbListener and pdbListener of every database in scope must be empty or Oracle names (a
+      letter, then letters, digits, _ # . -)
+  - failed: >-
+      {{ __oracle_common_scope_entries | select('mapping') | map(attribute='dbvip', default='') | map('string')
+         | reject('equalto', '') | reject('match', __oracle_common_re_host) | list | length > 0 }}
+    msg: "sid_server_dict: the dbvip of every database in scope must be empty or a host name or IP address"
+  - failed: "{{ __oracle_common_scope_owners | length > 1 }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): the databases of one ORACLE_HOME must have the same
+      dbowner (the owner of the home, who applies the patch); got {{ __oracle_common_scope_owners | join(', ') }}
+  - failed: >-
+      {{ [oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs]
+         | reject('boolean') | map('string') | map('lower') | reject('in', __oracle_common_bool_strings) | list | length > 0 }}
+    msg: >-
+      oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs
+      (aliases oracle_patch_*): must be true or false
+  - failed: >-
+      {{ (oracle_common_run_id | string | length > 0) and not ((oracle_common_run_id | string) is match(__oracle_common_re_run_id)) }}
+    msg: >-
+      oracle_common_run_id (alias oracle_patch_run_id): must be empty (generated) or a letter or digit, then up to 63
+      letters, digits, _ or -; got '{{ oracle_common_run_id }}'
+  - failed: >-
+      {{ not ((oracle_common_patch_timeout | string) is match(__oracle_common_re_uint) and (oracle_common_patch_timeout | int) > 0
+              and (oracle_common_patch_poll_delay | string) is match(__oracle_common_re_uint) and (oracle_common_patch_poll_delay | int) > 0
+              and (oracle_common_patch_poll_retries | string) is match(__oracle_common_re_uint) and (oracle_common_patch_poll_retries | int) > 0) }}
+    msg: >-
+      oracle_common_patch_timeout, oracle_common_patch_poll_delay, oracle_common_patch_poll_retries (aliases
+      oracle_patch_apply_timeout, oracle_patch_poll_delay, oracle_patch_poll_retries): must be positive whole numbers
+  - failed: >-
+      {{ (oracle_common_patch_timeout | string) is match(__oracle_common_re_uint)
+         and (oracle_common_patch_poll_delay | string) is match(__oracle_common_re_uint)
+         and (oracle_common_patch_poll_retries | string) is match(__oracle_common_re_uint)
+         and (oracle_common_patch_poll_retries | int) * (oracle_common_patch_poll_delay | int) > (oracle_common_patch_timeout | int) }}
+    msg: >-
+      oracle_common_patch_poll_retries x oracle_common_patch_poll_delay ({{ oracle_common_patch_poll_retries }} x
+      {{ oracle_common_patch_poll_delay }} s) must not exceed oracle_common_patch_timeout ({{ oracle_common_patch_timeout }} s):
+      the polling window must fit within the time the patch step is allowed to run
+  - failed: "{{ __oracle_common_invalid_path_names | length > 0 }}"
+    msg: >-
+      {{ __oracle_common_invalid_path_names | join(', ') }}: must be an absolute path of letters, digits and . _ / -
+      without a '..' component (and not the root directory)
+  - failed: >-
+      {{ not ((oracle_common_env_glob | string) is match(__oracle_common_re_env_glob)
+              and not ((oracle_common_env_glob | string) is search(__oracle_common_re_dotdot))) }}
+    msg: >-
+      oracle_common_env_glob: must be an absolute path pattern of letters, digits, . _ / - * ? without a '..' component;
+      got '{{ oracle_common_env_glob }}'
+  - failed: >-
+      {{ (oracle_common_jvm_components_file | string) is not match(__oracle_common_re_file_name) }}
+    msg: "oracle_common_jvm_components_file: must be a plain file name; got '{{ oracle_common_jvm_components_file }}'"
+  - failed: "{{ __oracle_common_placeholder in (oracle_common_patch_databases | string) }}"
+    msg: >-
+      oracle_common_patch_databases (alias oracle_patch_databases): still contains the placeholder
+      {{ __oracle_common_placeholder }}; replace it with the real value
+
+# --- Working directories (tasks/preflight_work_dirs.yml) ----------------------------------------------------------
+# Run id when oracle_common_run_id is empty: <AAP job id>_<UTC time>_<8 random hex digits> (the random filter without a
+# seed uses the system random source).
+__oracle_common_run_job_id: "{{ awx_job_id | default(tower_job_id | default('')) | string }}"
+__oracle_common_run_id_generated: >-
+  {{ (oracle_common_run_id | string) if (oracle_common_run_id | string | length > 0)
+     else ((__oracle_common_run_job_id ~ '_') if (__oracle_common_run_job_id is match(__oracle_common_re_uint)) else '')
+          ~ now(utc=true, fmt='%Y%m%dT%H%M%SZ') ~ '_' ~ ('%08x' | format(4294967295 | random)) }}
+__oracle_common_run_unique: "{{ (oracle_common_unique_work_dirs | string | lower) in __oracle_common_true_strings }}"
+# Input: __oracle_common_run_id_value (the run id, a fact set once per host).
+__oracle_common_run_suffix: "{{ ('_' ~ __oracle_common_run_id_value) if __oracle_common_run_unique else '' }}"
+__oracle_common_run_script_dir: >-
+  {{ (remote_script_directory | string) if remote_script_directory is defined
+     else (oracle_common_remote_script_directory | string) ~ __oracle_common_run_suffix }}
+__oracle_common_run_output_root: >-
+  {{ (remote_output_directory | string) if remote_output_directory is defined
+     else (oracle_common_remote_output_directory | string) ~ __oracle_common_run_suffix }}
+# Per database in scope: environment file, working directory (DATABASE_NAME: the output directory itself, as before;
+# the others: <output directory>/<SID>) and owner.
+__oracle_common_run_databases: >-
+  {%- set ns = namespace(out={}) -%}
+  {%- for sid in __oracle_common_scope -%}
+  {%-   set ns.out = ns.out | combine({sid: {
+          'env_file': (oracle_common_env_file | string) if sid == (DATABASE_NAME | string)
+                      else ((oracle_common_env_dir | string) ~ '/' ~ sid ~ '.env'),
+          'work_dir': __oracle_common_run_output_root if sid == (DATABASE_NAME | string)
+                      else (__oracle_common_run_output_root ~ '/' ~ sid),
+          'dbowner': ((sid_server_dict | default({}))[sid] | default({})).dbowner | default('') | string}}) -%}
+  {%- endfor -%}
+  {{ ns.out }}
+# Staging directory of the patch bundle for this run (oracle_common_patch.staging_dir + "_<run id>" unless it was given
+# explicitly). Input: oracle_common_patch (tasks/patch_artifact.yml).
+__oracle_common_run_staging_dir: >-
+  {{ (oracle_common_patch.staging_dir | string)
+     ~ (('_' ~ oracle_common_run.id) if ((oracle_common_run.unique | default(false)) and (oracle_common_patch_staging_dir | string | length == 0))
+        else '') }}
+
+# --- Script environment (tasks/preflight_work_dirs.yml, tasks/preflight_script_env.yml) ----------------------------
+# Inputs the bundled scripts read from their environment, per database in scope (all optional for the scripts; their
+# defaults reproduce the original behaviour). ORA_ENV_GLOB is passed on by database_patch.bash apply_home to
+# home_inventory.bash (its own check that no database of the home still runs). Input: oracle_common_run.
+__oracle_common_run_script_env: >-
+  {%- set ns = namespace(out={}) -%}
+  {%- for sid, db in (oracle_common_run.databases | default({})).items() -%}
+  {%-   set ns.out = ns.out | combine({sid: {'ORA_ENV_FILE': db.env_file, 'ORA_WORK_DIR': db.work_dir,
+                                            'ORA_ORATAB': oracle_common_oratab | string,
+                                            'ORA_ENV_GLOB': oracle_common_env_glob | string}
+                                           | combine({'ORA_OPATCH_BACKUP_DIR': oracle_common_opatch_backup_dir | string}
+                                                     if (oracle_common_opatch_backup_dir | string | length > 0) else {})}) -%}
+  {%- endfor -%}
+  {{ ns.out }}
+
+# --- Shared ORACLE_HOME decision (tasks/shared_home_decide.yml) --------------------------------------------------
+# Inputs (set by tasks/shared_home.yml, or by a test):
+#   __oracle_common_shared_home_inventory         text printed by home_inventory.bash (one line per database)
+#   __oracle_common_shared_home_inventory_errors  list of messages for home_inventory.bash runs that failed
+#   __oracle_common_shared_home_homes             dict ORACLE_SID -> resolved ORACLE_HOME, for the databases in scope
+#   __oracle_common_shared_home_scope             databases in scope (DATABASE_NAME first)
+#   __oracle_common_shared_home_primary           DATABASE_NAME
+#   __oracle_common_shared_home_report_only       true: report instead of refusing (the prerequisite playbook)
+# ORACLE_SIDs are compared without case (the original control steps lower-case the SID).
+__oracle_common_inventory_lines: >-
+  {{ (__oracle_common_shared_home_inventory | default('') | string).splitlines() | reject('match', __oracle_common_re_blank) | list }}
+__oracle_common_inventory_bad_lines: "{{ __oracle_common_inventory_lines | reject('match', __oracle_common_re_inventory_line) | list }}"
+__oracle_common_inventory_entries: >-
+  {{ __oracle_common_inventory_lines | select('match', __oracle_common_re_inventory_line)
+     | map('regex_findall', __oracle_common_re_inventory_line) | map('first') | list }}
+__oracle_common_home_sids: "{{ __oracle_common_inventory_entries | map('first') | unique | list }}"
+__oracle_common_home_running_sids: >-
+  {{ __oracle_common_inventory_entries | selectattr('1', 'equalto', 'running') | map('first') | unique | list }}
+__oracle_common_shared_home_scope_lower: "{{ __oracle_common_shared_home_scope | default([]) | map('lower') | list }}"
+__oracle_common_home_out_of_scope: >-
+  {%- set ns = namespace(out=[]) -%}
+  {%- for sid in __oracle_common_home_sids if (sid | lower) not in __oracle_common_shared_home_scope_lower -%}
+  {%-   set ns.out = ns.out + [sid] -%}
+  {%- endfor -%}
+  {{ ns.out }}
+__oracle_common_home_out_of_scope_running: >-
+  {{ __oracle_common_home_out_of_scope | select('in', __oracle_common_home_running_sids) | list }}
+__oracle_common_home_out_of_scope_stopped: >-
+  {{ __oracle_common_home_out_of_scope | reject('in', __oracle_common_home_running_sids) | list }}
+__oracle_common_shared_home_primary_home: >-
+  {{ (__oracle_common_shared_home_homes | default({}))[__oracle_common_shared_home_primary | default('')] | default('') }}
+__oracle_common_shared_home_unresolved: >-
+  {{ __oracle_common_shared_home_scope | default([]) | reject('in', __oracle_common_shared_home_homes | default({})) | list }}
+__oracle_common_shared_home_mismatched: >-
+  {{ __oracle_common_shared_home_homes | default({}) | dict2items
+     | selectattr('key', 'in', __oracle_common_shared_home_scope | default([]))
+     | rejectattr('value', 'equalto', __oracle_common_shared_home_primary_home) | map(attribute='key') | list }}
+__oracle_common_shared_home_primary_listed: >-
+  {{ (__oracle_common_shared_home_primary | default('') | lower) in (__oracle_common_home_sids | map('lower') | list) }}
+__oracle_common_shared_home_allow_partial: >-
+  {{ (oracle_common_allow_shared_home_partial | string | lower) in __oracle_common_true_strings }}
+__oracle_common_shared_home_is_report_only: >-
+  {{ (__oracle_common_shared_home_report_only | default(false) | string | lower) in __oracle_common_true_strings }}
+# Each finding has a kind: input (a scope error: always refused), detect (the home could not be listed reliably),
+# running / stopped (databases on the home that are not in scope).
+__oracle_common_shared_home_findings:
+  - kind: input
+    failed: "{{ __oracle_common_shared_home_unresolved | length > 0 }}"
+    msg: >-
+      the ORACLE_HOME of {{ __oracle_common_shared_home_unresolved | join(', ') }} could not be read from the environment
+      file (missing, unreadable, or it does not set ORACLE_HOME to an absolute path)
+  - kind: input
+    failed: "{{ __oracle_common_shared_home_mismatched | length > 0 }}"
+    msg: >-
+      {{ __oracle_common_shared_home_mismatched | join(', ') }} (in oracle_common_patch_databases, alias
+      oracle_patch_databases) do not use the ORACLE_HOME of {{ __oracle_common_shared_home_primary | default('') }}
+      ({{ __oracle_common_shared_home_primary_home }}): only databases of one home are patched together
+  - kind: detect
+    failed: "{{ __oracle_common_shared_home_inventory_errors | default([]) | length > 0 }}"
+    msg: >-
+      the databases that use {{ __oracle_common_shared_home_primary_home }} could not be listed:
+      {{ __oracle_common_shared_home_inventory_errors | default([]) | join('; ') }}
+  - kind: detect
+    failed: "{{ __oracle_common_inventory_bad_lines | length > 0 }}"
+    msg: >-
+      home_inventory.bash printed lines that are not <SID><TAB><running|stopped><TAB><sources>, so its list cannot be
+      trusted: {{ __oracle_common_inventory_bad_lines | join(' / ') }}
+  - kind: detect
+    failed: >-
+      {{ (__oracle_common_shared_home_inventory_errors | default([]) | length == 0)
+         and (__oracle_common_shared_home_unresolved | length == 0) and not __oracle_common_shared_home_primary_listed }}
+    msg: >-
+      the list of databases that use {{ __oracle_common_shared_home_primary_home }} does not include
+      {{ __oracle_common_shared_home_primary | default('') }} itself, so it cannot be trusted (check oratab
+      ({{ oracle_common_oratab }}) and the environment files ({{ oracle_common_env_glob }}))
+  - kind: running
+    failed: "{{ __oracle_common_home_out_of_scope_running | length > 0 }}"
+    msg: >-
+      running databases use {{ __oracle_common_shared_home_primary_home }} but are not in scope:
+      {{ __oracle_common_home_out_of_scope_running | join(', ') }}; add them to oracle_common_patch_databases (alias
+      oracle_patch_databases) to patch them together with {{ __oracle_common_shared_home_primary | default('') }}
+  - kind: stopped
+    failed: "{{ __oracle_common_home_out_of_scope_stopped | length > 0 }}"
+    msg: >-
+      stopped databases use {{ __oracle_common_shared_home_primary_home }} but are not in scope:
+      {{ __oracle_common_home_out_of_scope_stopped | join(', ') }};
+      {{ 'proceeding because oracle_common_allow_shared_home_partial is true: they need datapatch when they are next started'
+         if __oracle_common_shared_home_allow_partial
+         else ('add them to oracle_common_patch_databases (alias oracle_patch_databases), or, if they are stale or '
+               ~ 'decommissioned, set oracle_common_allow_shared_home_partial=true knowingly') }}
+# Kinds that refuse the run: scope errors always; the others only when enforcing (not the prerequisite playbook), and
+# stopped out-of-scope databases only without the opt-in.
+__oracle_common_shared_home_refuse_kinds: >-
+  {{ ['input'] + ([] if __oracle_common_shared_home_is_report_only
+                  else (['detect', 'running'] + ([] if __oracle_common_shared_home_allow_partial else ['stopped']))) }}
+__oracle_common_shared_home_refusals: >-
+  {{ __oracle_common_shared_home_findings | selectattr('failed') | selectattr('kind', 'in', __oracle_common_shared_home_refuse_kinds)
+     | map(attribute='msg') | list }}
+__oracle_common_shared_home_warnings: >-
+  {{ __oracle_common_shared_home_findings | selectattr('failed') | rejectattr('kind', 'in', __oracle_common_shared_home_refuse_kinds)
+     | map(attribute='msg') | list }}
+
+# --- Patch status of the databases in scope (tasks/preflight_patch_status.yml) ------------------------------------
+# Input: __oracle_common_status_rcs, a dict ORACLE_SID -> exit code of database_patch.bash status (0 proceed,
+# 2 already applied, anything else an error).
+__oracle_common_status_applied: >-
+  {{ __oracle_common_status_rcs | default({}) | dict2items | selectattr('value', 'equalto', 2) | map(attribute='key') | list }}
+__oracle_common_status_pending: >-
+  {{ __oracle_common_status_rcs | default({}) | dict2items | selectattr('value', 'equalto', 0) | map(attribute='key') | list }}
+__oracle_common_status_errors: >-
+  {{ __oracle_common_status_rcs | default({}) | dict2items | rejectattr('value', 'in', [0, 2]) | map(attribute='key') | list }}
+# applied: every database already has the patch; pending: none has it; mixed: some have it; error: a status check
+# failed (or there was nothing to check).
+__oracle_common_status_outcome: >-
+  {{ 'error' if ((__oracle_common_status_errors | length > 0) or (__oracle_common_status_rcs | default({}) | length == 0))
+     else ('applied' if (__oracle_common_status_pending | length == 0)
+           else ('mixed' if (__oracle_common_status_applied | length > 0) else 'pending')) }}
+__oracle_common_status_fail_when_applied: >-
+  {{ (oracle_common_fail_when_already_applied | string | lower) in __oracle_common_true_strings }}

@@ -1,9 +1,23 @@
 ---
+# Downloads and stages the patch, then runs the prerequisite checks for every database in scope (oracle_common_run.scope:
+# DATABASE_NAME, plus the other databases of its ORACLE_HOME when oracle_common_patch_databases lists them):
+#   - per database: the AIX 12.1 qopiprep fix, then the status check (exit code 2: already applied);
+#   - oracle_common preflight_patch_status.yml decides: go on, nothing to do (already applied everywhere: the playbook
+#     skips the run with the "unneeded" notification, or fails with it when oracle_common_fail_when_already_applied), or
+#     refuse (applied in some databases only);
+#   - when there is something to patch: the OPatch upgrade and conflict check once for the home (DATABASE_NAME), and
+#     utlrp per database.
+# The scripts keep their positional arguments and read the other inputs from the environment (oracle_common_script_env:
+# ORA_ENV_FILE, ORA_WORK_DIR, ORA_ORATAB, ORA_DB_RU_PATTERN, ORA_JVM_RU_PATTERN, ORA_OPATCH_BACKUP_DIR).
+# check_if (one / two / three) is still set for compatibility; the playbooks read oracle_common_patch_status.
 - name: Run prereq
   become: true
-  become_user: "{{sid_server_dict[ORACLE_SID].dbowner}}"
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  vars:
+    __oracle_database_patch_role_script: "{{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash"
   block:
-    - set_fact:
+    - name: Mark the prerequisite progress (download)
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
         check_if: "one"
 
     - name: Download and copy patch to server
@@ -12,35 +26,83 @@
         artf_file_name: "{{ patch_file_name }}"
         temp_dir: "{{ patch_folder_name }}"
 
-    - name: Update $ORACLE_HOME/QOpatch/qopiprep.bat for AIX/12.1c
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} qopiprep {{ patch_folder_name }}
-      register: shell_output
-      failed_when: shell_output.rc != 0
+    - name: Update $ORACLE_HOME/QOpatch/qopiprep.bat for AIX/12.1c ({{ __oracle_database_patch_role_sid }})
+      ansible.builtin.command:
+        argv:
+          - "{{ __oracle_database_patch_role_script }}"
+          - "{{ __oracle_database_patch_role_sid }}"
+          - qopiprep
+          - "{{ patch_folder_name }}"
+      environment: "{{ oracle_common_script_env[__oracle_database_patch_role_sid] }}"
+      loop: "{{ oracle_common_run.scope }}"
+      loop_control:
+        loop_var: __oracle_database_patch_role_sid
+      register: __oracle_database_patch_role_qopiprep
+      changed_when: true
       when:
         - ansible_distribution == "AIX"
         - db_ver == "12.1"
 
-    - set_fact:
+    - name: Mark the prerequisite progress (status)
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
         check_if: "two"
 
-    - name: Check if we should apply patch
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} status {{ patch_folder_name }}
-      register: shell_output
-      failed_when: shell_output.rc != 0
+    # Exit code 0: the patch is to be applied; 2: it is already applied; anything else: an error. The status check starts
+    # a database that is not open (the original behaviour).
+    - name: Check if we should apply patch ({{ __oracle_database_patch_role_sid }})
+      ansible.builtin.command:
+        argv:
+          - "{{ __oracle_database_patch_role_script }}"
+          - "{{ __oracle_database_patch_role_sid }}"
+          - status
+          - "{{ patch_folder_name }}"
+      environment: "{{ oracle_common_script_env[__oracle_database_patch_role_sid] }}"
+      loop: "{{ oracle_common_run.scope }}"
+      loop_control:
+        loop_var: __oracle_database_patch_role_sid
+      register: __oracle_database_patch_role_status
+      changed_when: false
+      failed_when: __oracle_database_patch_role_status.rc not in [0, 2]
 
-    - set_fact:
-        check_if: "three"
+    - name: Decide whether there is anything to patch
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: preflight_patch_status
+      vars:
+        __oracle_common_status_rcs: >-
+          {{ dict(__oracle_database_patch_role_status.results | map(attribute='__oracle_database_patch_role_sid') | list
+                  | zip(__oracle_database_patch_role_status.results | map(attribute='rc') | list)) }}
 
-    - name: Run prereq
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} prereq {{ patch_folder_name }}
-      register: shell_output
-      failed_when: shell_output.rc != 0
+    - name: Run the remaining prerequisite checks
+      when: oracle_common_patch_status.outcome != 'applied'
+      block:
+        - name: Mark the prerequisite progress (prerequisite checks)
+          ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
+            check_if: "three"
 
-    - name: Run utlrp.sql
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} utlrp {{ patch_folder_name }}
-      register: shell_output
-      failed_when: shell_output.rc != 0
+        # OPatch upgrade (the previous OPatch is kept, see oracle_common_opatch_backup_dir) and conflict check: once,
+        # for the home.
+        - name: Run prereq
+          ansible.builtin.command:
+            argv:
+              - "{{ __oracle_database_patch_role_script }}"
+              - "{{ DATABASE_NAME }}"
+              - prereq
+              - "{{ patch_folder_name }}"
+          environment: "{{ oracle_common_script_env[DATABASE_NAME] }}"
+          register: __oracle_database_patch_role_prereq
+          changed_when: true
+
+        - name: Run utlrp.sql ({{ __oracle_database_patch_role_sid }})
+          ansible.builtin.command:
+            argv:
+              - "{{ __oracle_database_patch_role_script }}"
+              - "{{ __oracle_database_patch_role_sid }}"
+              - utlrp
+              - "{{ patch_folder_name }}"
+          environment: "{{ oracle_common_script_env[__oracle_database_patch_role_sid] }}"
+          loop: "{{ oracle_common_run.scope }}"
+          loop_control:
+            loop_var: __oracle_database_patch_role_sid
+          register: __oracle_database_patch_role_utlrp
+          changed_when: true

@@ -1,15 +1,39 @@
 ---
+# Downloads the patch bundle into the staging directory (temp_dir) and extracts it, as the staging owner (b_user).
+# Per-run directories (oracle_common_run.unique, the default): the staging directory carries "_<run id>", must not exist
+# yet (a path that exists belongs to another run or was planted, and is refused), and is recorded in
+# oracle_database_patch_role_created_paths so the cleanup removes it and nothing else. With the original fixed names
+# (oracle_common_unique_work_dirs false) an earlier staging directory is removed first, as before.
 - name: Copy files to server
   become: true
   become_user: "{{ b_user }}"
+  vars:
+    __oracle_database_patch_role_unique: "{{ oracle_common_run.unique | default(false) | bool }}"
   block:
-    - set_fact:
+    - name: Set the download directory
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
         download_dir: "{{ temp_dir }}"
 
-    - name: Remove prior {{ temp_dir }}
-      file:
+    - name: Remove the prior staging directory (fixed directory names only) {{ temp_dir }}
+      ansible.builtin.file:
         state: absent
         path: "{{ temp_dir }}/"
+      when: not __oracle_database_patch_role_unique
+
+    - name: Check whether the staging directory exists {{ temp_dir }}
+      ansible.builtin.stat:
+        path: "{{ temp_dir }}"
+        follow: false
+        get_checksum: false
+      register: __oracle_database_patch_role_staging_before
+
+    - name: Refuse a per-run staging directory that already exists {{ temp_dir }}
+      ansible.builtin.assert:
+        that: not (__oracle_database_patch_role_staging_before.stat.exists and __oracle_database_patch_role_unique)
+        fail_msg: >-
+          {{ temp_dir }} already exists, but this run ({{ oracle_common_run.id | default('') }}) has not created it yet:
+          refusing to use (or remove) a staging directory another run or another database created.
+        quiet: true
 
     - name: Create {{ temp_dir }}
       ansible.builtin.file:
@@ -17,10 +41,17 @@
         state: directory
         mode: "{{ oracle_common_modes.script }}"
 
+    - name: Record the staging directory created by this run
+      ansible.builtin.set_fact:
+        oracle_database_patch_role_created_paths: >-
+          {{ oracle_database_patch_role_created_paths | default([])
+             + [{'path': temp_dir, 'owner': b_user, 'remove': true}] }}
+      when: not __oracle_database_patch_role_staging_before.stat.exists
+
     # The repository folder (oracle_common_patch_repo_url, alias artifactory_repo, plus the release folder) is
     # resolved and checked by oracle_common (tasks/patch_artifact.yml); it is not shown in the task name because
     # it may carry credentials.
-    - name: Download {{ artf_file_name }} to {{ download_dir }}
+    - name: Download the patch bundle {{ artf_file_name }}
       ansible.builtin.get_url:
         url: '{{ oracle_common_patch.repo_dir_url }}/{{ artf_file_name }}'
         dest: '{{ download_dir }}/{{ artf_file_name }}'
@@ -30,35 +61,45 @@
         tmp_dest: "{{ temp_dir }}"
         use_proxy: false
 
-    - name: Extract {{ artf_file_name }} into {{ temp_dir }}
+    - name: Extract the patch bundle {{ artf_file_name }}
       ansible.builtin.unarchive:
         remote_src: true
         src: "{{ download_dir }}/{{ artf_file_name }}"
         dest: "{{ temp_dir }}"
 
-    - name: Remove {{ download_dir }}/{{ artf_file_name }}
-      file:
+    - name: Remove the downloaded bundle {{ download_dir ~ '/' ~ artf_file_name }}
+      ansible.builtin.file:
         state: absent
         path: "{{ item }}"
       loop:
         - "{{ download_dir }}/{{ artf_file_name }}"
-      ignore_errors: true
+      # Best effort, as before (the original ignored errors here): a failure is reported below, not hidden.
+      register: __oracle_database_patch_role_bundle_removal
+      failed_when: false
 
-    - name: Find all files in "{{ temp_dir }}"
-      find:
+    - name: Report a downloaded bundle that could not be removed
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: could not remove {{ download_dir }}/{{ artf_file_name }}
+          ({{ __oracle_database_patch_role_bundle_removal.results | map(attribute='msg', default='') | select | join('; ') }})
+      # failed_when: false clears 'failed'; a removed (or absent) path reports state absent.
+      when: __oracle_database_patch_role_bundle_removal.results | map(attribute='state', default='') | reject('equalto', 'absent') | list | length > 0
+
+    - name: Find all archives in the staging directory {{ temp_dir }}
+      ansible.builtin.find:
         paths: "{{ temp_dir }}"
         patterns: '*.zip,*.tar.gz'
-      register: output
+      register: __oracle_database_patch_role_archives
 
-    - name: Extract all files into {{ temp_dir }}
+    - name: Extract all archives into the staging directory {{ temp_dir }}
       ansible.builtin.unarchive:
         remote_src: true
         src: "{{ item.path }}"
         dest: "{{ temp_dir }}"
-      with_items: "{{ output.files }}"
+      loop: "{{ __oracle_database_patch_role_archives.files }}"
 
-    - name: Change Permissions of all files in {{ temp_dir }}
-      file:
+    - name: Change Permissions of all files in the staging directory {{ temp_dir }}
+      ansible.builtin.file:
         path: "{{ temp_dir }}"
         state: directory
         recurse: true

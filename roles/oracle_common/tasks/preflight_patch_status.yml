@@ -1,0 +1,43 @@
+---
+# Decides, before anything is stopped, whether the run goes on, from the exit codes of database_patch.bash status for
+# every database in scope (input __oracle_common_status_rcs: {<SID>: rc}; 0 proceed, 2 already applied). Sets
+# oracle_common_patch_status: {applied, pending, errors, outcome} with outcome
+#   pending  no database has the patch: go on
+#   applied  every database has it: nothing to do. The run ends successfully with the "unneeded" notification, or,
+#            with oracle_common_fail_when_already_applied (the original outcome), fails after that notification
+#   mixed    some databases have it and some do not: refused (the home is probably patched already; run datapatch
+#            in the others, or patch them in a run of their own)
+#   error    a status check failed
+# The logic is __oracle_common_status_* in defaults/main/safety.yml.
+- name: Summarise the patch status of the databases in scope
+  ansible.builtin.set_fact:
+    oracle_common_patch_status:
+      applied: "{{ __oracle_common_status_applied }}"
+      pending: "{{ __oracle_common_status_pending }}"
+      errors: "{{ __oracle_common_status_errors }}"
+      outcome: "{{ __oracle_common_status_outcome }}"
+
+- name: Show the patch status of the databases in scope
+  ansible.builtin.debug:
+    msg: >-
+      Patch status: {{ oracle_common_patch_status.outcome }} (already applied: {{ oracle_common_patch_status.applied | join(', ') or 'none' }};
+      to patch: {{ oracle_common_patch_status.pending | join(', ') or 'none' }})
+
+- name: Check the patch status of the databases in scope
+  ansible.builtin.assert:
+    that: oracle_common_patch_status.outcome in ['pending', 'applied']
+    fail_msg: >-
+      {{ ('The patch is already applied in ' ~ (oracle_common_patch_status.applied | join(', ')) ~ ' but not in '
+          ~ (oracle_common_patch_status.pending | join(', ')) ~ ': refusing to patch the Oracle home again. Run datapatch in '
+          ~ 'the databases that still need it, or patch them in a run of their own.')
+         if oracle_common_patch_status.outcome == 'mixed'
+         else ('The patch status could not be determined for ' ~ (oracle_common_patch_status.errors | join(', ') or 'any database')) }}
+    quiet: true
+
+- name: Fail on a patch that is already applied (oracle_common_fail_when_already_applied)
+  ansible.builtin.assert:
+    that: not (oracle_common_patch_status.outcome == 'applied' and __oracle_common_status_fail_when_applied)
+    fail_msg: >-
+      The patch is already applied in every database in scope ({{ oracle_common_patch_status.applied | join(', ') }});
+      failing as requested by oracle_common_fail_when_already_applied (alias oracle_patch_fail_when_already_applied).
+    quiet: true

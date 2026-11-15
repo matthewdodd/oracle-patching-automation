@@ -1,0 +1,20 @@
+---
+# Adds the settings of the selected Oracle version (oracle_common_oracle_version, from vars/oracle_versions/<version>.yml,
+# validated by tasks/oracle_version.yml) to the environment of the bundled scripts for every database in scope
+# (oracle_common_script_env, set by tasks/preflight_work_dirs.yml):
+#   ORA_DB_RU_PATTERN, ORA_JVM_RU_PATTERN  README.html patterns of the Release Update and OJVM folders (readme_ru_pattern,
+#                                          readme_jvm_pattern)
+#   ORA_JVM_MIN_MATCHES                    README.html lines that must match the OJVM pattern (readme_jvm_min_matches)
+#   ORA_DATAPATCH_STARTUP_MODE             how datapatch starts the database: upgrade or normal (datapatch_startup_mode)
+# The shipped values reproduce the original behaviour (the scripts' own defaults).
+- name: Add the Oracle version settings to the script environment
+  ansible.builtin.set_fact:
+    oracle_common_script_env: >-
+      {{ dict(oracle_common_script_env.keys() | list
+              | zip(oracle_common_script_env.values() | map('combine', __oracle_common_readme_env) | list)) }}
+  vars:
+    __oracle_common_readme_env:
+      ORA_DB_RU_PATTERN: "{{ oracle_common_oracle_version.readme_ru_pattern }}"
+      ORA_JVM_RU_PATTERN: "{{ oracle_common_oracle_version.readme_jvm_pattern }}"
+      ORA_JVM_MIN_MATCHES: "{{ oracle_common_oracle_version.readme_jvm_min_matches | string }}"
+      ORA_DATAPATCH_STARTUP_MODE: "{{ oracle_common_oracle_version.datapatch_startup_mode }}"

@@ -1,0 +1,446 @@
+---
+# Production-host safety flow regression test: shutdown verification, multi-database patch flow, patch timeout, script
+# environment and cleanup. Runs on the controller only (the end-to-end part works in a temporary directory it removes
+# afterwards); it reads the task files as data and changes nothing in the repository. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_flow.yml
+#
+# 1. Structure: a failed or unverified shutdown fails (no ignore_errors; ora_pmon_<SID> must be gone); listener stops
+#    keep their exit code (0 or 4 accepted); every database in scope is started and stopped; one database is patched
+#    with apply (the original step), several with apply_home once then datapatch each; every database_patch.bash call
+#    uses an argument vector, the original positional arguments and the script environment; the patch step's async
+#    timeout and polling come from the variables; the cleanup removes only the paths this run recorded.
+# 2. tasks/patch_step.yml end to end against a stub database_patch.bash: positional arguments and ORA_* environment
+#    reach the script; a failing step and a step that outlives the polling window fail with a clear message.
+# 3. initialization_role tasks/db_owner.yml: the database owner is read from the exact ora_pmon_<SID> process.
+# 4. initialization_role tasks/run_dir.yml and oracle_database_patch_role clean_files_from_server.yml end to end: a
+#    per-run directory that already exists (or a planted symbolic link) is refused, a new one is created and recorded,
+#    and the cleanup removes only the recorded paths marked for removal.
+- name: Production-host safety flow regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_become: false
+    repo: "{{ playbook_dir }}/.."
+    stop_database: "{{ lookup('ansible.builtin.file', repo ~ '/roles/standalone_control_role/tasks/stop_database.yml') | from_yaml }}"
+    stop_listener_files:
+      - roles/standalone_control_role/tasks/stop_listener.yml
+      - roles/standalone_control_role/tasks/stop_pdb_listener.yml
+    control_sid: "{{ lookup('ansible.builtin.file', repo ~ '/oracle_control_sid.yml') | from_yaml }}"
+    patch_main: "{{ lookup('ansible.builtin.file', repo ~ '/roles/oracle_database_patch_role/tasks/main.yml') | from_yaml }}"
+    patch_step: "{{ lookup('ansible.builtin.file', repo ~ '/roles/oracle_database_patch_role/tasks/patch_step.yml') | from_yaml }}"
+    run_prereq_text: "{{ lookup('ansible.builtin.file', repo ~ '/roles/oracle_database_patch_role/tasks/run_prereq.yml') }}"
+    run_prereq: "{{ run_prereq_text | from_yaml }}"
+    cleanup_text: "{{ lookup('ansible.builtin.file', repo ~ '/roles/oracle_database_patch_role/tasks/clean_files_from_server.yml') }}"
+    db_owner: "{{ lookup('ansible.builtin.file', repo ~ '/roles/initialization_role/tasks/db_owner.yml') | from_yaml }}"
+    # ps -e -o user= -o args= output with look-alike processes.
+    ps_lines:
+      - "oracle   ora_pmon_ORCL01"
+      - "oracle2  ora_pmon_ORCL012"
+      - "root     grep ora_pmon_ORCL01"
+      - "grid     ora_pmon_+ASM1"
+      - "oracle   ora_smon_ORCL01"
+  tasks:
+    # --- 1. Structure -----------------------------------------------------------------------------------------------
+    - name: Check a failed or unverified shutdown fails
+      vars:
+        # Module keys contain dots, so they are read with brackets (selectattr would treat the dots as a path).
+        command_tasks: "{{ stop_database | select('contains', 'ansible.builtin.command') | list }}"
+        stop_task: "{{ command_tasks | selectattr('name', 'search', 'Shutdown oracle database') | first }}"
+        verify_task: "{{ command_tasks | selectattr('name', 'search', 'Verify the database is down') | first }}"
+        asserts_text: "{{ stop_database | select('contains', 'ansible.builtin.assert') | list | to_json }}"
+      ansible.builtin.assert:
+        that:
+          - stop_database | selectattr('ignore_errors', 'defined') | list | length == 0
+          - stop_task['ansible.builtin.command'].argv[1] == 'stop'
+          - stop_task['ansible.builtin.command'].argv[2] is search('ORACLE_SID')
+          - stop_task.failed_when | default(true) == false
+          - verify_task['ansible.builtin.command'].argv == ['ps', '-e', '-o', 'args=']
+          - verify_task.until is search('length == 0')
+          - verify_task.retries is search('standalone_control_role_shutdown_verify_retries')
+          - verify_task.vars.__standalone_control_role_re_pmon is search('ora_pmon_')
+          - asserts_text is search('standalone_control_role_db_stop_status.rc')
+          - asserts_text is search('standalone_control_role_db_stop_ps.stdout_lines')
+        fail_msg: "stop_database.yml no longer fails on a failed or unverified shutdown"
+
+    - name: Check the pmon pattern matches only the exact process of the SID
+      ansible.builtin.assert:
+        that:
+          - "'ora_pmon_orcl01' is match(re_pmon)"
+          - "'  ora_pmon_ORCL01  ' is match(re_pmon)"
+          - "'ora_pmon_orcl012' is not match(re_pmon)"
+          - "'ora_pmon_orcl0' is not match(re_pmon)"
+          - "'grep ora_pmon_orcl01' is not match(re_pmon)"
+          - "'orcl01' in re_pmon"
+      vars:
+        # Data read from a file is not templated: put the SID in place of the template expression of the pattern.
+        re_pmon_template: "{{ (stop_database | selectattr('name', 'search', 'Verify the database is down') | first).vars.__standalone_control_role_re_pmon }}"
+        re_pmon: "{{ re_pmon_template | replace('{' ~ '{ ORACLE_SID | regex_escape }' ~ '}', 'orcl01') }}"
+
+    - name: Check the listener stops keep their exit code
+      vars:
+        tasks_list: "{{ lookup('ansible.builtin.file', repo ~ '/' ~ item) | from_yaml }}"
+        stop_task: "{{ tasks_list | select('contains', 'ansible.builtin.command') | first }}"
+      ansible.builtin.assert:
+        that:
+          - tasks_list | selectattr('ignore_errors', 'defined') | list | length == 0
+          - stop_task['ansible.builtin.command'].argv[2] is search('\Aset -o pipefail; ')
+          - stop_task['ansible.builtin.command'].expand_argument_vars == false
+          - stop_task.failed_when is search('not in \[0, 4\]')
+          # The values are positional parameters (argv[4:]); the static script (argv[2]) has no template in it.
+          - stop_task['ansible.builtin.command'].argv[2] is not search('\{\{')
+          - stop_task['ansible.builtin.command'].argv[4:] | select('search', '\{\{') | list | length == 4
+        fail_msg: "{{ item }}: the listener stop no longer keeps its exit code (or interpolates values into the shell script)"
+      loop: "{{ stop_listener_files }}"
+
+    - name: Check every database in scope is stopped and started
+      vars:
+        control_text: "{{ control_sid | to_json }}"
+      ansible.builtin.assert:
+        that:
+          - control_text is search('oracle_common_run')
+          - control_text is search('scope')
+          - control_text is search('loop')
+          - control_text is search('standalone_control_role')
+        fail_msg: "oracle_control_sid.yml no longer runs the control role for every database in scope"
+
+    - name: Check the single-database and multi-database patch flows
+      vars:
+        single: "{{ patch_main | selectattr('name', 'search', 'Apply Patch for ') | first }}"
+        multi: "{{ patch_main | selectattr('name', 'equalto', 'Patch the Oracle home shared by the databases in scope') | first }}"
+        multi_steps: "{{ multi.block | select('contains', 'ansible.builtin.include_tasks') | list }}"
+      ansible.builtin.assert:
+        that:
+          - single.vars.__oracle_database_patch_role_step == 'apply'
+          - single.when == 'oracle_common_run.scope | length == 1'
+          - multi.when == 'oracle_common_run.scope | length > 1'
+          - multi_steps | map(attribute='vars.__oracle_database_patch_role_step') | list == ['apply_home', 'datapatch']
+          - multi_steps[1].loop is search('oracle_common_run.scope')
+        fail_msg: "the patch flow changed: one database must use apply; several apply_home once, then datapatch each"
+
+    - name: Check the patch step timeout and script inputs come from the variables
+      vars:
+        run_task: "{{ patch_step | first }}"
+        wait_task: "{{ patch_step[1] }}"
+      ansible.builtin.assert:
+        that:
+          - run_task.async is search('oracle_common_patch_timeout')
+          - run_task.poll == 0
+          - run_task.environment is search('oracle_common_script_env\[')
+          - run_task['ansible.builtin.command'].argv | length == 4
+          - wait_task.retries is search('oracle_common_patch_poll_retries')
+          - wait_task.delay is search('oracle_common_patch_poll_delay')
+          - wait_task.become_user == run_task.become_user
+        fail_msg: "patch_step.yml: async timeout, polling or script inputs no longer come from the variables"
+
+    - name: Check every database_patch.bash call in the prerequisite checks
+      vars:
+        flat: "{{ run_prereq[0].block + (run_prereq[0].block | selectattr('block', 'defined') | map(attribute='block') | flatten) }}"
+        calls: "{{ flat | select('contains', 'ansible.builtin.command') | list }}"
+        call_modes: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for c in calls -%}{%- set ns.out = ns.out + [c['ansible.builtin.command']['argv'][2]] -%}{%- endfor -%}
+          {{ ns.out }}
+      ansible.builtin.assert:
+        that:
+          - calls | length == 4
+          - calls | rejectattr('environment', 'search', 'oracle_common_script_env\[') | list | length == 0
+          - call_modes == ['qopiprep', 'status', 'prereq', 'utlrp']
+          - calls[1].failed_when is search('not in \[0, 2\]')
+          # The OPatch upgrade and conflict check runs once for the home (no loop), as DATABASE_NAME.
+          - calls[2].loop is not defined
+          - calls[2]['ansible.builtin.command']['argv'][1] is search('DATABASE_NAME')
+          - calls[3].loop is search('oracle_common_run.scope')
+          - run_prereq_text is not search('shell:')
+        fail_msg: "run_prereq.yml: a database_patch.bash call lost its argument vector, environment or exit-code handling"
+
+    - name: Check the cleanup removes only what this run recorded
+      ansible.builtin.assert:
+        that:
+          - cleanup_text is search('initialization_role_created_paths')
+          - cleanup_text is search('oracle_database_patch_role_created_paths')
+          - cleanup_text is search("selectattr\('remove'\)")
+          - cleanup_text is not search('patch_folder_name')
+          - cleanup_text is not search('remote_script_directory')
+        fail_msg: "clean_files_from_server.yml removes paths this run did not record"
+
+    - name: Check the database owner is read from the exact pmon process
+      vars:
+        owner_vars: "{{ (db_owner | selectattr('name', 'search', 'Validate the DB owner id') | first).vars }}"
+        re_line: "{{ owner_vars.__initialization_role_re_ps_line }}"
+        re_pmon: "{{ owner_vars.__initialization_role_re_pmon | replace('{' ~ '{ __initialization_role_sid | regex_escape }' ~ '}', 'ORCL01') }}"
+        owners: >-
+          {{ ps_lines | map('regex_findall', re_line) | select | map('first') | selectattr('1', 'match', re_pmon) | map('first') | unique | list }}
+      ansible.builtin.assert:
+        that:
+          - "'ORCL01' in re_pmon"
+          - owners == ['oracle']
+          - (db_owner | first)['ansible.builtin.command'].argv[:2] == ['ps', '-e']
+        fail_msg: "db_owner.yml reads the wrong owner: {{ owners }}"
+
+    # --- 2. tasks/patch_step.yml end to end -------------------------------------------------------------------------
+    - name: Run tasks/patch_step.yml against a stub database_patch.bash
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: safety_flow.
+          register: flow_tmp
+
+        - name: Create the stub script directory
+          ansible.builtin.file:
+            path: "{{ flow_tmp.path }}/oracle_database_patch_role"
+            state: directory
+            mode: "0700"
+
+        # Logs its arguments and environment, sleeps STUB_SLEEP seconds and exits with STUB_RC.
+        - name: Create the stub database_patch.bash
+          ansible.builtin.copy:
+            dest: "{{ flow_tmp.path }}/oracle_database_patch_role/database_patch.bash"
+            mode: "0700"
+            content: |
+              #!/bin/sh
+              {
+                printf 'args=%s|%s|%s\n' "$1" "$2" "$3"
+                printf 'ORA_ENV_FILE=%s\nORA_WORK_DIR=%s\nORA_DB_RU_PATTERN=%s\n' "$ORA_ENV_FILE" "$ORA_WORK_DIR" "$ORA_DB_RU_PATTERN"
+              } > "$(dirname "$0")/call.$2.log"
+              echo "stub $2 for $1"
+              sleep "${STUB_SLEEP:-0}"
+              exit "${STUB_RC:-0}"
+
+        - name: Set the patch step inputs
+          ansible.builtin.set_fact:
+            remote_script_directory: "{{ flow_tmp.path }}"
+            patch_folder_name: /u01/oracle/software_dir/19.0/jan26_ORCL02_r1
+            sid_server_dict: {ORCL02: {dbowner: oracle}}
+            oracle_common_run: {databases: {ORCL02: {work_dir: "{{ flow_tmp.path }}"}}}
+            oracle_common_patch_timeout: 60
+            oracle_common_patch_poll_delay: 1
+            oracle_common_patch_poll_retries: 30
+            oracle_common_script_env:
+              ORCL02:
+                ORA_ENV_FILE: /local/ORCL02.env
+                ORA_WORK_DIR: /tmp/ora_db_patch_ORCL01_r1/ORCL02
+                ORA_DB_RU_PATTERN: Database * Release Update
+                STUB_RC: "0"
+
+        - name: Run tasks/patch_step.yml (datapatch, succeeds)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+            tasks_from: patch_step
+          vars:
+            __oracle_database_patch_role_step: datapatch
+            __oracle_database_patch_role_step_sid: ORCL02
+
+        - name: Read what the stub received
+          ansible.builtin.slurp:
+            src: "{{ flow_tmp.path }}/oracle_database_patch_role/call.datapatch.log"
+          register: flow_call
+
+        - name: Check the arguments and environment reached the script
+          ansible.builtin.assert:
+            that:
+              - (flow_call.content | b64decode).splitlines() == expected
+            fail_msg: "unexpected call: {{ flow_call.content | b64decode }}"
+          vars:
+            expected:
+              - args=ORCL02|datapatch|/u01/oracle/software_dir/19.0/jan26_ORCL02_r1
+              - ORA_ENV_FILE=/local/ORCL02.env
+              - ORA_WORK_DIR=/tmp/ora_db_patch_ORCL01_r1/ORCL02
+              - ORA_DB_RU_PATTERN=Database * Release Update
+
+        - name: Fail a step that exits with an error
+          block:
+            - name: Make the stub fail
+              ansible.builtin.set_fact:
+                oracle_common_script_env: {ORCL02: {STUB_RC: "1"}}
+            - name: Run tasks/patch_step.yml (apply_home, fails)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+                tasks_from: patch_step
+              vars:
+                __oracle_database_patch_role_step: apply_home
+                __oracle_database_patch_role_step_sid: ORCL02
+            - name: Fail the test (the failing step passed)
+              ansible.builtin.fail:
+                msg: "patch_step.yml accepted a step that exited with 1"
+          rescue:
+            - name: Check the failure message
+              ansible.builtin.assert:
+                that:
+                  - "'database_patch.bash apply_home for ORCL02 failed with exit code 1' in ansible_failed_result.msg | default('')"
+                  - "'left shut down' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        - name: Fail a step that outlives the polling window
+          block:
+            - name: Make the stub slow and the polling window short
+              ansible.builtin.set_fact:
+                oracle_common_script_env: {ORCL02: {STUB_SLEEP: "20", STUB_RC: "0"}}
+                oracle_common_patch_timeout: 30
+                oracle_common_patch_poll_delay: 1
+                oracle_common_patch_poll_retries: 2
+            - name: Run tasks/patch_step.yml (apply, too slow)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+                tasks_from: patch_step
+              vars:
+                __oracle_database_patch_role_step: apply
+                __oracle_database_patch_role_step_sid: ORCL02
+            - name: Fail the test (the slow step passed)
+              ansible.builtin.fail:
+                msg: "patch_step.yml accepted a step that had not finished"
+          rescue:
+            - name: Check the timeout message
+              ansible.builtin.assert:
+                that:
+                  - "'database_patch.bash apply for ORCL02 had not finished after 2 s of polling' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ flow_tmp.path }}"
+            state: absent
+          when: flow_tmp.path is defined
+
+    # --- 4. Per-run directories and cleanup end to end ---------------------------------------------------------------
+    - name: Create, refuse and clean up per-run directories
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: safety_dirs.
+          register: dirs_tmp
+
+        - name: Read the current user
+          ansible.builtin.command:
+            argv: [id, -un]
+          register: dirs_user
+          changed_when: false
+
+        - name: Plant a symbolic link and a directory of another run
+          ansible.builtin.file:
+            src: "{{ item.src | default(omit) }}"
+            path: "{{ dirs_tmp.path }}/{{ item.path }}"
+            state: "{{ item.state }}"
+            mode: "{{ '0700' if item.state == 'directory' else omit }}"
+          loop:
+            - {path: other_run, state: directory}
+            - {path: planted, state: link, src: /etc}
+
+        - name: Set the run (per-run directories)
+          ansible.builtin.set_fact:
+            oracle_common_modes: {script: "0700"}
+            oracle_common_run: {id: r1, unique: true}
+            initialization_role_created_paths: []
+
+        - name: Create a new per-run directory
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/initialization_role"
+            tasks_from: run_dir
+          vars:
+            __initialization_role_dir: "{{ dirs_tmp.path }}/scripts_r1"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+
+        - name: Create a new per-run working directory (kept by the cleanup)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/initialization_role"
+            tasks_from: run_dir
+          vars:
+            __initialization_role_dir: "{{ dirs_tmp.path }}/output_r1"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: false
+
+        - name: Check the directories were created and recorded
+          ansible.builtin.assert:
+            that:
+              - initialization_role_created_paths | map(attribute='path') | list == [dirs_tmp.path ~ '/scripts_r1', dirs_tmp.path ~ '/output_r1']
+              - initialization_role_created_paths | map(attribute='remove') | list == [true, false]
+              - initialization_role_created_paths | map(attribute='owner') | unique | list == [dirs_user.stdout]
+            fail_msg: "unexpected record: {{ initialization_role_created_paths }}"
+
+        - name: Refuse the directory of another run
+          block:
+            - name: Use the directory of another run (must fail)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ playbook_dir }}/../roles/initialization_role"
+                tasks_from: run_dir
+              vars:
+                __initialization_role_dir: "{{ dirs_tmp.path }}/other_run"
+                __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+                __initialization_role_dir_remove: true
+            - name: Fail the test (the directory of another run was accepted)
+              ansible.builtin.fail:
+                msg: "run_dir.yml accepted the directory of another run"
+          rescue:
+            - name: Check the refusal and that nothing was recorded (the directory of another run)
+              ansible.builtin.assert:
+                that:
+                  - "'other_run already exists' in ansible_failed_result.msg | default('')"
+                  - initialization_role_created_paths | length == 2
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ initialization_role_created_paths }}"
+
+        - name: Refuse a planted symbolic link
+          block:
+            - name: Use a planted symbolic link (must fail)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ playbook_dir }}/../roles/initialization_role"
+                tasks_from: run_dir
+              vars:
+                __initialization_role_dir: "{{ dirs_tmp.path }}/planted"
+                __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+                __initialization_role_dir_remove: true
+            - name: Fail the test (a planted symbolic link was accepted)
+              ansible.builtin.fail:
+                msg: "run_dir.yml accepted a planted symbolic link"
+          rescue:
+            - name: Check the refusal and that nothing was recorded (a planted symbolic link)
+              ansible.builtin.assert:
+                that:
+                  - "'planted already exists' in ansible_failed_result.msg | default('')"
+                  - initialization_role_created_paths | length == 2
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ initialization_role_created_paths }}"
+
+        - name: Re-use an existing directory with the original fixed names (not recorded)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/initialization_role"
+            tasks_from: run_dir
+          vars:
+            oracle_common_run: {id: r1, unique: false}
+            __initialization_role_dir: "{{ dirs_tmp.path }}/other_run"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+
+        - name: Record a staging directory of this run (as copy_files_to_server.yml does)
+          ansible.builtin.file:
+            path: "{{ dirs_tmp.path }}/staging_r1"
+            state: directory
+            mode: "0700"
+
+        - name: Set the recorded staging directory
+          ansible.builtin.set_fact:
+            oracle_database_patch_role_created_paths: [{path: "{{ dirs_tmp.path }}/staging_r1", owner: "{{ dirs_user.stdout }}", remove: true}]
+
+        - name: Run the cleanup
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+            tasks_from: clean_files_from_server
+
+        - name: List what is left
+          ansible.builtin.find:
+            paths: "{{ dirs_tmp.path }}"
+            file_type: any
+          register: dirs_left
+
+        - name: Check the cleanup removed only this run's recorded paths
+          ansible.builtin.assert:
+            that:
+              - dirs_left.files | map(attribute='path') | map('basename') | sort == ['other_run', 'output_r1', 'planted']
+            fail_msg: "unexpected leftovers: {{ dirs_left.files | map(attribute='path') | map('basename') | sort }}"
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ dirs_tmp.path }}"
+            state: absent
+          when: dirs_tmp.path is defined

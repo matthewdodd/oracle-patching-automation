@@ -1,0 +1,54 @@
+---
+# Creates one working directory of this run (include variables __initialization_role_dir, __initialization_role_dir_owner:
+# the become user that creates it, and __initialization_role_dir_remove: whether the cleanup removes it), with
+# oracle_common_modes.script, and records it in initialization_role_created_paths when this run created it.
+# With per-run directories (oracle_common_run.unique) a path that already exists (directory, file or symbolic link) is
+# refused: it belongs to another run or was planted. With the original fixed names it is re-used, as before.
+- name: Check whether the directory exists {{ __initialization_role_dir }}
+  ansible.builtin.stat:
+    path: "{{ __initialization_role_dir }}"
+    follow: false
+    get_checksum: false
+  register: __initialization_role_dir_before
+
+- name: Refuse a per-run directory that already exists {{ __initialization_role_dir }}
+  ansible.builtin.assert:
+    that: not (__initialization_role_dir_before.stat.exists and (oracle_common_run.unique | bool))
+    fail_msg: >-
+      {{ __initialization_role_dir }} already exists, but this run ({{ oracle_common_run.id }}) has not created it yet:
+      refusing to use a directory another run (or someone else) created. Remove it if it is stale, or set a different
+      oracle_common_run_id.
+    quiet: true
+
+- name: Create the directory {{ __initialization_role_dir }}
+  ansible.builtin.file:
+    path: "{{ __initialization_role_dir }}"
+    state: directory
+    mode: "{{ oracle_common_modes.script }}"
+
+- name: Check the directory {{ __initialization_role_dir }}
+  ansible.builtin.stat:
+    path: "{{ __initialization_role_dir }}"
+    follow: false
+    get_checksum: false
+  register: __initialization_role_dir_after
+
+- name: Verify the directory is a real directory owned by this run's user {{ __initialization_role_dir }}
+  ansible.builtin.assert:
+    that:
+      - __initialization_role_dir_after.stat.isdir | default(false)
+      - not (__initialization_role_dir_after.stat.islnk | default(false))
+      - __initialization_role_dir_after.stat.pw_name | default('') == __initialization_role_dir_owner
+    fail_msg: >-
+      {{ __initialization_role_dir }} is not a directory owned by {{ __initialization_role_dir_owner }}
+      (owner {{ __initialization_role_dir_after.stat.pw_name | default('unknown') }}, symbolic link:
+      {{ __initialization_role_dir_after.stat.islnk | default('unknown') }}); refusing to use it
+    quiet: true
+
+- name: Record the directory created by this run {{ __initialization_role_dir }}
+  ansible.builtin.set_fact:
+    initialization_role_created_paths: >-
+      {{ initialization_role_created_paths | default([])
+         + [{'path': __initialization_role_dir, 'owner': __initialization_role_dir_after.stat.pw_name,
+             'remove': __initialization_role_dir_remove | bool}] }}
+  when: not __initialization_role_dir_before.stat.exists

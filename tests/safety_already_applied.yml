@@ -1,0 +1,191 @@
+---
+# "Already applied" outcome regression test (roles/oracle_common tasks/preflight_patch_status.yml, the
+# __oracle_common_status_* rules of defaults/main/safety.yml, and how the playbooks use them). Runs on the controller
+# only, reads the playbooks as data and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_already_applied.yml
+#
+# 1. Outcome per set of database_patch.bash status exit codes (stubbed): pending (0 everywhere), applied (2
+#    everywhere), mixed, error.
+# 2. tasks/preflight_patch_status.yml: applied passes by default (successful skip) and fails with
+#    oracle_common_fail_when_already_applied (the original outcome, also through the alias); mixed and error fail;
+#    pending passes.
+# 3. Both playbooks: the skip block (unneeded notification, then meta end_host) runs after the prerequisite checks and
+#    before anything is stopped, and the prerequisite rescue sends "unneeded" only for an applied patch.
+- name: Already-applied outcome regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/safety.yml
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    status_cases:
+      - {name: one database to patch, rcs: {ORCL01: 0}, outcome: pending}
+      - {name: one database already patched, rcs: {ORCL01: 2}, outcome: applied}
+      - {name: two databases to patch, rcs: {ORCL01: 0, ORCL02: 0}, outcome: pending}
+      - {name: two databases already patched, rcs: {ORCL01: 2, ORCL02: 2}, outcome: applied}
+      - {name: one of two databases patched, rcs: {ORCL01: 2, ORCL02: 0}, outcome: mixed}
+      - {name: a failed status check, rcs: {ORCL01: 0, ORCL02: 1}, outcome: error}
+      - {name: a failed status check next to an applied patch, rcs: {ORCL01: 2, ORCL02: 1}, outcome: error}
+      - {name: nothing checked, rcs: {}, outcome: error}
+    playbooks:
+      - oracle_database_patch.yml
+      - oracle_database_patch_prereq.yml
+  tasks:
+    # --- 1. Outcome rules -------------------------------------------------------------------------------------------
+    - name: Check the outcome of each set of status exit codes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_status_outcome == item.outcome
+          - (__oracle_common_status_applied | sort) == (item.rcs | dict2items | selectattr('value', 'equalto', 2) | map(attribute='key') | sort)
+          - (__oracle_common_status_pending | sort) == (item.rcs | dict2items | selectattr('value', 'equalto', 0) | map(attribute='key') | sort)
+        fail_msg: "case '{{ item.name }}': outcome {{ __oracle_common_status_outcome }} (expected {{ item.outcome }})"
+        quiet: true
+      vars:
+        __oracle_common_status_rcs: "{{ item.rcs }}"
+      loop: "{{ status_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Check the default of oracle_common_fail_when_already_applied (successful skip)
+      ansible.builtin.assert:
+        that:
+          - not (oracle_common_fail_when_already_applied | bool)
+          - not __oracle_common_status_fail_when_applied
+        quiet: true
+
+    # --- 2. tasks/preflight_patch_status.yml ------------------------------------------------------------------------
+    - name: Already applied everywhere (default) is a successful skip
+      block:
+        - name: Reset the outcome (sentinel)
+          ansible.builtin.set_fact:
+            oracle_common_patch_status: {outcome: __not_run__}
+        - name: Run tasks/preflight_patch_status.yml (applied, default)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_patch_status
+            __oracle_common_status_rcs: {ORCL01: 2, ORCL02: 2}
+        - name: Check the skip outcome
+          ansible.builtin.assert:
+            that:
+              - oracle_common_patch_status.outcome == 'applied'
+              - oracle_common_patch_status.applied | sort == ['ORCL01', 'ORCL02']
+            fail_msg: "unexpected: {{ oracle_common_patch_status }}"
+      rescue:
+        - name: Fail the test (an applied patch failed by default)
+          ansible.builtin.fail:
+            msg: "preflight_patch_status.yml failed an applied patch by default: {{ ansible_failed_result.msg | default('') }}"
+
+    - name: Nothing applied yet passes
+      block:
+        - name: Reset the outcome (sentinel)
+          ansible.builtin.set_fact:
+            oracle_common_patch_status: {outcome: __not_run__}
+        - name: Run tasks/preflight_patch_status.yml (pending)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_patch_status
+            __oracle_common_status_rcs: {ORCL01: 0}
+        - name: Check the pending outcome
+          ansible.builtin.assert:
+            that: oracle_common_patch_status.outcome == 'pending'
+            fail_msg: "unexpected: {{ oracle_common_patch_status }}"
+      rescue:
+        - name: Fail the test (a pending patch failed)
+          ansible.builtin.fail:
+            msg: "preflight_patch_status.yml failed a pending patch: {{ ansible_failed_result.msg | default('') }}"
+
+    # The toggle restores the original outcome. Set through the short alias (a fact wins over the play's vars files).
+    - name: Already applied everywhere fails with oracle_patch_fail_when_already_applied
+      block:
+        - name: Reset the outcome (sentinel) and set the toggle through its alias
+          ansible.builtin.set_fact:
+            oracle_common_patch_status: {outcome: __not_run__}
+            oracle_patch_fail_when_already_applied: "true"
+        - name: Run tasks/preflight_patch_status.yml (applied, toggle on; must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_patch_status
+            __oracle_common_status_rcs: {ORCL01: 2}
+        - name: Fail the test (the toggle was ignored)
+          ansible.builtin.fail:
+            msg: "preflight_patch_status.yml did not fail an applied patch with oracle_patch_fail_when_already_applied"
+      rescue:
+        - name: Check the failure keeps the applied outcome (the playbook then sends "unneeded")
+          ansible.builtin.assert:
+            that:
+              - oracle_common_patch_status.outcome == 'applied'
+              - "'oracle_common_fail_when_already_applied' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ oracle_common_patch_status }} / {{ ansible_failed_result.msg | default('') }}"
+      always:
+        - name: Switch the toggle off again
+          ansible.builtin.set_fact:
+            oracle_patch_fail_when_already_applied: false
+
+    - name: Applied in some databases only is refused
+      block:
+        - name: Reset the outcome (sentinel)
+          ansible.builtin.set_fact:
+            oracle_common_patch_status: {outcome: __not_run__}
+        - name: Run tasks/preflight_patch_status.yml (mixed; must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_patch_status
+            __oracle_common_status_rcs: {ORCL01: 2, ORCL02: 0}
+        - name: Fail the test (a mixed state was accepted)
+          ansible.builtin.fail:
+            msg: "preflight_patch_status.yml accepted a patch applied in ORCL01 but not in ORCL02"
+      rescue:
+        - name: Check the refusal
+          ansible.builtin.assert:
+            that:
+              - oracle_common_patch_status.outcome == 'mixed'
+              - "'already applied in ORCL01 but not in ORCL02' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ oracle_common_patch_status }} / {{ ansible_failed_result.msg | default('') }}"
+
+    - name: A failed status check fails
+      block:
+        - name: Reset the outcome (sentinel)
+          ansible.builtin.set_fact:
+            oracle_common_patch_status: {outcome: __not_run__}
+        - name: Run tasks/preflight_patch_status.yml (error; must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_patch_status
+            __oracle_common_status_rcs: {ORCL01: 1}
+        - name: Fail the test (a failed status check was accepted)
+          ansible.builtin.fail:
+            msg: "preflight_patch_status.yml accepted a failed status check"
+      rescue:
+        - name: Check the failure is not reported as already applied
+          ansible.builtin.assert:
+            that:
+              - oracle_common_patch_status.outcome == 'error'
+              - "'could not be determined for ORCL01' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ oracle_common_patch_status }} / {{ ansible_failed_result.msg | default('') }}"
+
+    # --- 3. Playbook wiring -----------------------------------------------------------------------------------------
+    - name: Check the playbooks skip an applied patch before anything is stopped
+      vars:
+        target_play: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../' ~ item) | from_yaml)[2] }}"
+        task_names: "{{ target_play.tasks | map(attribute='name') | list }}"
+        skip_block: "{{ target_play.tasks | selectattr('name', 'equalto', 'Skip a patch that is already applied') | first | default({}) }}"
+        prereq_block: "{{ target_play.tasks | selectattr('name', 'equalto', 'Run Prereq') | first | default({}) }}"
+        skip_text: "{{ skip_block | to_json }}"
+        rescue_text: "{{ prereq_block.rescue | default([]) | to_json }}"
+      ansible.builtin.assert:
+        that:
+          - "'Skip a patch that is already applied' in task_names"
+          - task_names.index('Skip a patch that is already applied') == task_names.index('Run Prereq') + 1
+          - task_names.index('Check the databases that use the Oracle home') < task_names.index('Run Prereq')
+          - ('Shutdown the Oracle Database' not in task_names)
+            or (task_names.index('Shutdown the Oracle Database') > task_names.index('Skip a patch that is already applied'))
+          - skip_block.when is search("outcome.*== 'applied'")
+          - "'end_host' in skip_text"
+          - "'\"call\": \"unneeded\"' in skip_text"
+          - "'clean_files_from_server' in skip_text"
+          - rescue_text is search("'unneeded' if .*oracle_common_patch_status.*== 'applied' else 'fail'")
+          - "'check_if' not in rescue_text"
+        fail_msg: "{{ item }}: the already-applied skip or the prerequisite rescue is not wired as expected (tasks: {{ task_names }})"
+        success_msg: "{{ item }}: already-applied skip wired before any shutdown"
+      loop: "{{ playbooks }}"

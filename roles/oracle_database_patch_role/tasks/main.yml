@@ -1,9 +1,16 @@
 ---
-# tasks file for Oracle Database Patching
+# Applies the staged patch as the database owner, after every database in scope has been shut down.
+#   - One database in scope (the default): database_patch.bash <SID> apply, the original single step (apply to the
+#     home, then datapatch).
+#   - Several databases of one ORACLE_HOME (oracle_common_patch_databases): database_patch.bash apply_home once (as a
+#     database whose status check found Java, when there is one, so the OJVM patch reaches the home), then
+#     database_patch.bash datapatch for each database.
+# Each step runs asynchronously (tasks/patch_step.yml: oracle_common_patch_timeout, polled every
+# oracle_common_patch_poll_delay seconds up to oracle_common_patch_poll_retries times).
 
-# The script mode comes from oracle_common (oracle_common_modes.script: oracle_common_script_permission, alias
-# script_permission, normalised and validated; 0777 is no longer allowed).
-- set_fact:
+# Original fact names. The script mode comes from oracle_common (oracle_common_modes.script; 0777 is not allowed).
+- name: Set the database and host facts
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] var-naming[pattern] - original fact names, kept for compatibility
     ORACLE_SID: "{{ DATABASE_NAME }}"
     server_name: "{{ target }}"
 
@@ -13,31 +20,55 @@
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   block:
     - name: Create roles/oracle_database_patch_role/files if not exist
-      copy:
+      # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
+      copy:  # noqa: fqcn[action-core]
         # role_path-based so the source does not depend on the playbook directory.
         src: "{{ role_path }}/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"
         mode: "{{ oracle_common_modes.script }}"
 
-- name: Oracle Database Patching
-  become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+- name: Apply Patch for {{ DATABASE_NAME }}
+  ansible.builtin.include_tasks: patch_step.yml
+  vars:
+    __oracle_database_patch_role_step: apply
+    __oracle_database_patch_role_step_sid: "{{ DATABASE_NAME }}"
+  when: oracle_common_run.scope | length == 1
+
+- name: Patch the Oracle home shared by the databases in scope
+  when: oracle_common_run.scope | length > 1
   block:
-    - name: Apply Patch for {{ DATABASE_NAME }}
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_patch.bash {{ DATABASE_NAME }} apply {{ patch_folder_name }}
-      async: 4000
-      poll: 0
-      register: shell_output
+    - name: Read the Java components found by the status check ({{ __oracle_database_patch_role_sid }})
+      ansible.builtin.slurp:
+        src: "{{ oracle_common_run.databases[__oracle_database_patch_role_sid].work_dir }}/{{ oracle_common_jvm_components_file }}"
+      become: true
+      become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+      loop: "{{ oracle_common_run.scope }}"
+      loop_control:
+        loop_var: __oracle_database_patch_role_sid
+      register: __oracle_database_patch_role_jvm
+      failed_when: false
 
-    - name: "Check on an async task: Apply Patch for {{ DATABASE_NAME }}"
-      async_status:
-        jid: "{{ shell_output.ansible_job_id }}"
-      register: job_result
-      until: job_result.finished
-      retries: 120
-      delay: 120
+    - name: Choose the database that applies the patch to the Oracle home
+      ansible.builtin.set_fact:
+        oracle_database_patch_role_home_sid: "{{ __oracle_database_patch_role_java_sids | first | default(DATABASE_NAME, true) }}"
+      vars:
+        __oracle_database_patch_role_java_sids: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for r in __oracle_database_patch_role_jvm.results if 'Java' in (r.content | default('') | b64decode) -%}
+          {%-   set ns.out = ns.out + [r['__oracle_database_patch_role_sid']] -%}
+          {%- endfor -%}
+          {{ ns.out }}
 
-    - debug:
-        var: job_result.stdout_lines
-      failed_when: job_result.rc != 0
+    - name: Apply the patch to the Oracle home as {{ oracle_database_patch_role_home_sid }}
+      ansible.builtin.include_tasks: patch_step.yml
+      vars:
+        __oracle_database_patch_role_step: apply_home
+        __oracle_database_patch_role_step_sid: "{{ oracle_database_patch_role_home_sid }}"
+
+    - name: Run datapatch in each database in scope
+      ansible.builtin.include_tasks: patch_step.yml
+      vars:
+        __oracle_database_patch_role_step: datapatch
+      loop: "{{ oracle_common_run.scope }}"
+      loop_control:
+        loop_var: __oracle_database_patch_role_step_sid

@@ -7,7 +7,10 @@ argument_specs:
     description:
       - startup - rename the alert log, start the database (and open PDBs), check the alert log, start the
         listener, check the listener logs, start the PDB listener (when sid_server_dict[ORACLE_SID].pdb is set).
-      - shutdown - stop the PDB listener (when pdb is set), the listener and the database.
+      - shutdown - stop the PDB listener (when pdb is set), the listener and the database, then verify the database
+        is down (no ora_pmon_<SID> process). A failed shutdown, a database still running, or a listener that cannot
+        be stopped (exit code other than 0 or 4 = already stopped) fails the role.
+      - oracle_control_sid.yml runs the role once per database in scope (oracle_common_run.scope).
       - Script file names (check_alertLog_script, rename_logs_script, start_database_script, ...) are role
         defaults and can be overridden from the inventory.
     options:
@@ -34,3 +37,14 @@ argument_specs:
       timeToPause:
         type: raw
         description: Original name of standalone_control_role_time_to_pause, still accepted.
+      remote_output_directory:
+        type: str
+        description: Working (log) directory of this database (set per database by oracle_control_sid.yml).
+      standalone_control_role_shutdown_verify_retries:
+        type: raw
+        description: >-
+          How many times the process list is checked for ora_pmon_<SID> after a shutdown (alias
+          oracle_patch_shutdown_verify_retries). Default 12.
+      standalone_control_role_shutdown_verify_delay:
+        type: raw
+        description: Seconds between two checks (alias oracle_patch_shutdown_verify_delay). Default 10.

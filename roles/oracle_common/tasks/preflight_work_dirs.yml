@@ -1,0 +1,54 @@
+---
+# Chooses this run's working directories on a target, before anything is created there (called first by
+# initialization_role). Validates the patch scope (tasks/preflight_scope.yml), picks the run id once per host and sets:
+#   oracle_common_run         id, unique (per-run directories), primary (DATABASE_NAME), scope (databases in run
+#                             order, DATABASE_NAME first), script_dir, output_root, and databases:
+#                             {<SID>: {env_file, work_dir, dbowner}}
+#   oracle_common_script_env  {<SID>: environment of the bundled scripts: ORA_ENV_FILE, ORA_WORK_DIR, ORA_ORATAB and,
+#                             when set, ORA_OPATCH_BACKUP_DIR}; tasks/preflight_script_env.yml adds the README patterns
+#                             once the Oracle version is known.
+# With oracle_common_unique_work_dirs (default true) the directories carry "_<run id>", so no two runs (or databases)
+# share a working directory; the original fixed names are used when it is false.
+- name: Validate the patch scope and the safety settings
+  ansible.builtin.import_tasks: preflight_scope.yml
+
+- name: Choose the run id
+  ansible.builtin.set_fact:
+    __oracle_common_run_id_value: "{{ __oracle_common_run_id_generated }}"
+  when: __oracle_common_run_id_value is not defined
+
+- name: Set this run's working directories
+  ansible.builtin.set_fact:
+    oracle_common_run:
+      id: "{{ __oracle_common_run_id_value }}"
+      unique: "{{ __oracle_common_run_unique }}"
+      primary: "{{ DATABASE_NAME | string }}"
+      scope: "{{ __oracle_common_scope }}"
+      script_dir: "{{ __oracle_common_run_script_dir }}"
+      output_root: "{{ __oracle_common_run_output_root }}"
+      databases: "{{ __oracle_common_run_databases }}"
+
+- name: Validate this run's working directories
+  ansible.builtin.assert:
+    that:
+      - oracle_common_run.id is match(__oracle_common_re_run_id)
+      - __oracle_common_invalid_path_names | length == 0
+    fail_msg: >-
+      Invalid working directories for this run (run id '{{ oracle_common_run.id }}'):
+      {{ __oracle_common_invalid_path_names | join(', ') }} must be absolute paths of letters, digits and . _ / - without
+      a '..' component, and the run id a letter or digit, then letters, digits, _ or -
+    success_msg: >-
+      Run {{ oracle_common_run.id }}: scripts in {{ oracle_common_run.script_dir }}, output in
+      {{ oracle_common_run.output_root }}{{ '' if oracle_common_run.unique else ' (fixed directory names: oracle_common_unique_work_dirs is false)' }}
+  vars:
+    __oracle_common_paths: >-
+      {%- set ns = namespace(out={'script directory (remote_script_directory)': oracle_common_run.script_dir,
+                                  'output directory (remote_output_directory)': oracle_common_run.output_root}) -%}
+      {%- for sid, db in oracle_common_run.databases.items() -%}
+      {%-   set ns.out = ns.out | combine({('working directory of ' ~ sid): db.work_dir, ('environment file of ' ~ sid): db.env_file}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+
+- name: Set the script environment of each database in scope
+  ansible.builtin.set_fact:
+    oracle_common_script_env: "{{ __oracle_common_run_script_env }}"
