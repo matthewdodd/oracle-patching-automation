@@ -2,10 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project intends to follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html) from its first tagged release.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-15
 
 The production-readiness rework of the original playbooks. They run on a supported ansible-core, refuse to patch an
 Oracle home other databases still use, have no environment-specific values in code, and are secure by default. The
@@ -119,7 +119,6 @@ and migrating existing job templates".
   (GPL-3.0-or-later with the carve-out for Oracle, Red Hat and IBM software), and the `inventory/dev`, `test` and
   `prod` skeletons (`"<CHANGE_ME>"` placeholders that fail validation, wired `vault_*` mappings,
   `vault.yml.example` per environment, `inventory/README.md`).
-
 - **U8**: CI (`lint` job) rejects a committed vault file without the `$ANSIBLE_VAULT;` header (`*.example` exempt),
   shellchecks the script tests and the Molecule fixture, and runs every `tests/*.yml` playbook and
   `tests/shell/run.bash`; the Molecule workflow ends with one `molecule` job that sums up the scenario jobs (the
@@ -171,4 +170,6 @@ and migrating existing job templates".
   runs still upgrade OPatch, run utlrp and start a database that is not open, as before),
   `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, explicit patch ids.
 - The prerequisite playbook still sends the "patching" cards (the `prereq` states exist but are unused, as before).
-- Real-host validation on RHEL 8/9/10 and AIX, and the Molecule scenarios in CI.
+- Real-host validation on RHEL 8/9/10 and AIX.
+
+[1.0.0]: https://github.com/matthewdodd/oracle-patching-automation/releases/tag/v1.0.0
