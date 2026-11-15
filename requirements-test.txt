@@ -5,7 +5,7 @@
 # driver's and the playbook's) are pinned in molecule/<scenario>/collections.yml and installed by Molecule itself.
 -r requirements.txt
 molecule==26.11.0
-molecule-plugins[docker]==26.10.12
+molecule-plugins[docker]==26.11.0
 # Pulled in by the docker extra; pinned for reproducible runs.
 docker==7.2.0
 requests==2.34.2
