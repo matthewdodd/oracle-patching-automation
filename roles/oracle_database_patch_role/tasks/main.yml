@@ -1,9 +1,10 @@
 ---
 # tasks file for Oracle Database Patching
 
+# The script mode comes from oracle_common (oracle_common_modes.script: oracle_common_script_permission, alias
+# script_permission, normalised and validated; 0777 is no longer allowed).
 - set_fact:
     ORACLE_SID: "{{ DATABASE_NAME }}"
-    script_permission: "0777"
     server_name: "{{ target }}"
 
 - name: Copy Scripts to {{ remote_script_directory }}
@@ -13,7 +14,7 @@
         # role_path-based so the source does not depend on the playbook directory.
         src: "{{ role_path }}/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"
-        mode: "0777"
+        mode: "{{ oracle_common_modes.script }}"
 
 - name: Oracle Database Patching
   become: true

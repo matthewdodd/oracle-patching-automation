@@ -1,0 +1,61 @@
+---
+# Builds the registry of supported Oracle versions: one entry per vars/oracle_versions/<version>.yml (the mapping
+# under its __oracle_common_version_definition key), keyed by the file name (12.1, 12.2, 19, 23ai, 26ai), with
+# oracle_common_oracle_version_overrides merged over it.
+# Adding a version means adding one file. Runs on any host (no facts needed); tasks/oracle_version_select.yml
+# picks the entry for the detected database version.
+- name: Load the supported Oracle versions
+  ansible.builtin.set_fact:
+    __oracle_common_oracle_versions: >-
+      {{ dict(__oracle_common_version_files | map('basename') | map('splitext') | map('first')
+              | zip(query('ansible.builtin.file', *__oracle_common_version_files) | map('from_yaml')
+                    | map(attribute='__oracle_common_version_definition')))
+         | combine(oracle_common_oracle_version_overrides, recursive=True) }}
+  vars:
+    __oracle_common_version_files: "{{ query('ansible.builtin.fileglob', role_path ~ '/vars/oracle_versions/*.yml') | sort }}"
+
+# Each entry must be complete and safe to use in paths, URLs and patterns. The conditions are checked in order
+# and the first false one stops the check, so a missing key never causes an undefined-variable error.
+- name: Check that at least one Oracle version is defined
+  ansible.builtin.assert:
+    that: __oracle_common_oracle_versions | length > 0
+    fail_msg: "No Oracle version files found in {{ role_path }}/vars/oracle_versions/"
+    quiet: true
+
+- name: Check each supported Oracle version
+  ansible.builtin.assert:
+    that:
+      - item.value is mapping
+      - __oracle_common_oracle_version_keys | reject('in', item.value) | list | length == 0
+      - item.value.artifact_dir | string is match(__oracle_common_re_path_component)
+      - item.value.staging_component | string is match(__oracle_common_re_path_component)
+      - (item.value.match_regex | string).startswith('\\A') and (item.value.match_regex | string).endswith('\\Z')
+      - (item.value.accept_regex | string).startswith('\\A') and (item.value.accept_regex | string).endswith('\\Z')
+      - item.value.datapatch_startup_mode | string in __oracle_common_datapatch_startup_modes
+      - item.value.readme_jvm_min_matches | string is match('\\A[0-9]+\\Z')
+      - item.value.qopiprep_fix is boolean
+      - item.value.desupported is boolean
+      - item.value.readme_ru_pattern | string | length > 0
+      - item.value.readme_jvm_pattern | string | length > 0
+      - (item.value.readme_ru_pattern ~ item.value.readme_jvm_pattern) is not search("['\\n]")
+    fail_msg: >-
+      Oracle version {{ item.key }} (vars/oracle_versions/{{ item.key }}.yml or oracle_common_oracle_version_overrides)
+      is invalid: it must define {{ __oracle_common_oracle_version_keys | join(', ') }}; artifact_dir and
+      staging_component must be one path component; match_regex and accept_regex anchored with \A ... \Z;
+      datapatch_startup_mode one of {{ __oracle_common_datapatch_startup_modes | join(', ') }}; readme_jvm_min_matches
+      a whole number; qopiprep_fix and desupported true or false; the README patterns non-empty single lines without
+      single quotes.
+    quiet: true
+  loop: "{{ __oracle_common_oracle_versions | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Check the selected Oracle version
+  ansible.builtin.assert:
+    that: >-
+      (oracle_common_db_version | string | length) == 0
+      or (oracle_common_db_version | string) in __oracle_common_oracle_versions
+    fail_msg: >-
+      oracle_common_db_version (alias oracle_patch_db_version) must be empty (detect the version) or one of
+      {{ __oracle_common_oracle_versions.keys() | list | join(', ') }}; got '{{ oracle_common_db_version }}'
+    quiet: true

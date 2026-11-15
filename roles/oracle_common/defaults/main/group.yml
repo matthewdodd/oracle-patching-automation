@@ -1,0 +1,8 @@
+---
+# OS group membership (the original behaviour): the database owner (sid_server_dict[<SID>].dbowner) and the
+# patch staging owner (oracle or grid) are added to oracle_common_group_name. Set
+# oracle_common_manage_group_membership to false where membership is managed elsewhere (LDAP/IdM, images).
+oracle_common_manage_group_membership: true
+# Required while membership is managed: there is no generic group name (the original hard-coded a site group).
+# The original variable name GROUP_NAME is accepted as an alias.
+oracle_common_group_name: "{{ GROUP_NAME | default('') }}"

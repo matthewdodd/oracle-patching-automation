@@ -1,0 +1,21 @@
+---
+# Kernel names (ansible_facts['system']) this automation supports. Platform specifics are loaded from
+# vars/<system>.yml, vars/<os_family>.yml, vars/<distribution>.yml, vars/<os_family>-<major>.yml and
+# vars/<distribution>-<major>.yml (generic first, most specific last); supporting another distribution or
+# release means adding one of those files.
+oracle_common_supported_systems:
+  - Linux
+  - AIX
+# Check that the prerequisite packages (AIX: filesets) are installed (the original behaviour, on RHEL only;
+# now the whole Red Hat family with a list per release). Set false to skip the check.
+oracle_common_check_packages: true
+# Values below come from the OS variable files and can be overridden per host or group.
+# Prefix of the patch bundle file name (LINUX or AIX).
+oracle_common_artifact_platform: "{{ __oracle_common_artifact_platform }}"
+# How installed packages are read: package_facts manager (rpm on the Red Hat family; empty on AIX, where rpm
+# package_facts is never used), or a read-only query command (argument vector) whose output the regex parses.
+oracle_common_package_manager: "{{ __oracle_common_package_manager }}"
+oracle_common_package_query_command: "{{ __oracle_common_package_query_command }}"
+oracle_common_package_query_regex: "{{ __oracle_common_package_query_regex }}"
+# Packages (AIX: filesets) that must be installed; an empty list skips the check with a message.
+oracle_common_prereq_packages: "{{ __oracle_common_prereq_packages }}"

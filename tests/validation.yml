@@ -1,0 +1,258 @@
+---
+# Input validation regression test for roles/oracle_common (tasks/validate_job.yml and tasks/validate.yml).
+# Runs on the controller only and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/validation.yml
+#
+# Every case starts from the valid inputs in vars/valid_inputs.yml, changes some of them, runs the real
+# validation and checks the exact number of errors and the text each error must contain (and, for secrets, that
+# the value is not echoed). Covered: trailing newlines (\A ... \Z anchors), ORACLE_SID / ticket / host / Oracle
+# name formats, the shared '..' path rule (leading, middle, trailing, bare), integer and string modes
+# (511 = unquoted 0777, group/world-writable), checksums (algorithm and exact hex length, all-zero, https
+# checksum-file URL), https repository URLs, "<CHANGE_ME>" placeholders everywhere, and the example inventory.
+- name: Input validation regression test
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min]
+  # Role defaults and patterns first, then the fixture (a later vars file wins).
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/group.yml
+    - ../roles/oracle_common/defaults/main/inputs.yml
+    - ../roles/oracle_common/defaults/main/modes.yml
+    - ../roles/oracle_common/defaults/main/oracle_versions.yml
+    - ../roles/oracle_common/defaults/main/patch.yml
+    - ../roles/oracle_common/defaults/main/platform.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/vars/main.yml
+    - ../roles/oracle_common/vars/Linux.yml
+    - vars/valid_inputs.yml
+  vars:
+    validation_sha256: "sha256:{{ '0123456789abcdef' * 4 }}"
+    validation_example: >-
+      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../inventory/example/group_vars/all/oracle_common.yml') | from_yaml }}
+    validation_cases:
+      # --- baseline ---------------------------------------------------------------------------------
+      - {name: valid baseline, set: {}, errors: []}
+      # --- DATABASE_NAME (ORACLE_SID) -------------------------------------------------------------
+      - name: DATABASE_NAME with a trailing newline
+        set: {DATABASE_NAME: "ORCL01\n"}
+        errors: ["DATABASE_NAME:", oracle_common_env_file, oracle_common_remote_script_directory, oracle_common_remote_output_directory]
+        count: 2
+      - name: DATABASE_NAME with a dollar sign
+        set: {DATABASE_NAME: "ORCL$1"}
+        errors: ["DATABASE_NAME:", oracle_common_env_file]
+        count: 2
+      - {name: DATABASE_NAME starting with a digit, set: {DATABASE_NAME: 1ORCL}, errors: ["DATABASE_NAME:"]}
+      - name: DATABASE_NAME with a shell command
+        set: {DATABASE_NAME: "ORCL01; rm -rf /"}
+        errors: ["DATABASE_NAME:", oracle_common_env_file]
+        count: 2
+      - {name: DATABASE_NAME longer than 30 characters, set: {DATABASE_NAME: "{{ 'A' * 31 }}"}, errors: ["DATABASE_NAME:"]}
+      - {name: DATABASE_NAME not in sid_server_dict, set: {DATABASE_NAME: ORCL02}, errors: ["has no entry for DATABASE_NAME 'ORCL02'"]}
+      - name: DATABASE_NAME placeholder
+        set: {DATABASE_NAME: <CHANGE_ME>}
+        errors: ["DATABASE_NAME:", "still contains the placeholder", oracle_common_env_file, "still the placeholder"]
+        count: 4
+      # --- TICKET_NUMBER ------------------------------------------------------------------------------
+      - {name: TICKET_NUMBER with a trailing newline, set: {TICKET_NUMBER: "CHG0030001\n"}, errors: ["TICKET_NUMBER: must match"]}
+      - {name: TICKET_NUMBER with a shell command, set: {TICKET_NUMBER: "CHG 001; id"}, errors: ["TICKET_NUMBER: must match"]}
+      - name: TICKET_NUMBER placeholder
+        set: {TICKET_NUMBER: <CHANGE_ME>}
+        errors: ["TICKET_NUMBER: must match", "still contains the placeholder"]
+        count: 2
+      - name: TICKET_NUMBER required but empty
+        set: {oracle_common_ticket_required: true, TICKET_NUMBER: ""}
+        errors: ["TICKET_NUMBER: required"]
+      - {name: TICKET_NUMBER optional and empty, set: {TICKET_NUMBER: ""}, errors: []}
+      - name: ticket regex anchored with ^ and $
+        set: {oracle_common_ticket_number_regex: '^CHG[0-9]+$'}
+        errors: ["oracle_common_ticket_number_regex: must be anchored"]
+      # --- target -----------------------------------------------------------------------------------
+      - {name: target empty, set: {target: ""}, errors: ["target: required"]}
+      - {name: target with a shell command, set: {target: "dbhost01.example.com;id"}, errors: ["target: every host"]}
+      - {name: target with invalid hosts, set: {target: "good.example.com bad_host! -x"}, errors: ["bad_host!", "-x"], count: 1}
+      - name: target placeholder
+        set: {target: <CHANGE_ME>}
+        errors: ["target: every host", "still contains the placeholder"]
+        count: 2
+      - {name: target names and addresses, set: {target: "dbhost01.example.com,10.0.0.5 fe80::1\nlocalhost"}, errors: []}
+      # --- override_chg -----------------------------------------------------------------------------
+      - {name: override_chg not a boolean, set: {override_chg: maybe}, errors: ["override_chg: must be true or false"]}
+      - {name: override_chg boolean true, set: {override_chg: true}, errors: []}
+      - {name: override_chg legacy string TRUE, set: {override_chg: "TRUE"}, errors: []}
+      # --- sid_server_dict ----------------------------------------------------------------------------
+      - name: dbowner with a shell command
+        set: {sid_server_dict: {ORCL01: {dbowner: "oracle;id", pdb: "", dbvip: "", dbListener: L1, pdbListener: ""}}}
+        errors: [".dbowner: must be a POSIX user name"]
+      - name: listener name with a dollar sign
+        set: {sid_server_dict: {ORCL01: {dbowner: oracle, pdb: "", dbvip: "", dbListener: "LISTENER$X", pdbListener: ""}}}
+        errors: ["pdb, dbListener and pdbListener must be empty or Oracle names"]
+      - name: dbvip with a space
+        set: {sid_server_dict: {ORCL01: {dbowner: oracle, pdb: "", dbvip: "vip host", dbListener: L1, pdbListener: ""}}}
+        errors: [".dbvip: must be empty or a host name"]
+      - name: dbvip placeholder
+        set: {sid_server_dict: {ORCL01: {dbowner: oracle, pdb: "", dbvip: <CHANGE_ME>, dbListener: L1, pdbListener: ""}}}
+        errors: [".dbvip: must be empty or a host name", "still contains the placeholder"]
+        count: 2
+      - {name: database entry not a dictionary, set: {sid_server_dict: {ORCL01: oops}}, errors: ["must be a dictionary"]}
+      - {name: sid_server_dict not a dictionary, set: {sid_server_dict: oops}, errors: ["sid_server_dict: required"]}
+      - name: non-CDB entry with empty PDB values
+        set: {sid_server_dict: {ORCL01: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_ORCL01, pdbListener: ""}}}
+        errors: []
+      # --- permission modes (normalised with '%04o' before validation) ---------------------------------
+      - {name: mode int 511 (unquoted 0777), set: {oracle_common_script_permission: 511}, errors: [oracle_common_script_permission, "got 0777"]}
+      - {name: mode string 0777, set: {oracle_common_script_permission: "0777"}, errors: ["got 0777"]}
+      - {name: mode int 493 (unquoted 0755), set: {oracle_common_script_permission: 493}, errors: []}
+      - {name: mode int 420 (unquoted 0644), set: {oracle_common_script_permission: 420}, errors: []}
+      - {name: mode unquoted decimal 750, set: {oracle_common_script_permission: 750}, errors: ["got 1356"]}
+      - {name: mode group-writable 0775, set: {oracle_common_script_permission: "0775"}, errors: ["got 0775"]}
+      - {name: mode world-writable 0757, set: {oracle_common_script_permission: "0757"}, errors: ["got 0757"]}
+      - {name: mode with a trailing newline, set: {oracle_common_script_permission: "0755\n"}, errors: [oracle_common_script_permission]}
+      - {name: mode symbolic, set: {oracle_common_script_permission: u+rwx}, errors: ["got u+rwx"]}
+      - name: mode placeholder
+        set: {oracle_common_script_permission: <CHANGE_ME>}
+        errors: [oracle_common_script_permission, "still the placeholder"]
+        count: 2
+      # --- paths: the shared '..' rule ----------------------------------------------------------------
+      - name: path with a trailing '..'
+        set: {oracle_common_staging_base: /tmp/..}
+        errors: [oracle_common_staging_base, oracle_common_remote_script_directory, oracle_common_remote_output_directory]
+        count: 1
+      - name: path with a leading '..'
+        set: {oracle_common_staging_base: ../tmp}
+        errors: [oracle_common_staging_base, oracle_common_remote_script_directory]
+        count: 1
+      - name: path that is a bare '..'
+        set: {oracle_common_staging_base: ".."}
+        errors: [oracle_common_staging_base, oracle_common_remote_output_directory]
+        count: 1
+      - name: path with a '..' in the middle
+        set: {oracle_common_staging_base: /tmp/../var}
+        errors: [oracle_common_staging_base, oracle_common_remote_script_directory]
+        count: 1
+      - {name: path that is the root directory, set: {oracle_common_staging_base: /}, errors: [oracle_common_staging_base], count: 1}
+      - {name: relative path, set: {oracle_common_staging_base: tmp}, errors: [oracle_common_staging_base], count: 1}
+      - {name: path with a trailing newline, set: {oracle_common_staging_base: "/tmp/x\n"}, errors: [oracle_common_staging_base], count: 1}
+      - {name: path names that merely contain dots, set: {oracle_common_staging_base: /tmp/app..x/.hidden/19.0.0/x..}, errors: []}
+      - name: environment directory with a trailing '..'
+        set: {oracle_common_env_dir: /local/..}
+        errors: [oracle_common_env_dir, oracle_common_env_file]
+        count: 1
+      - {name: grid patch base with a trailing '..', set: {oracle_common_patch_base_dir_grid: /u02/grid/..}, errors: [oracle_common_patch_base_dir_grid]}
+      - name: oracle patch base with a '..' in the middle
+        set: {oracle_common_patch_base_dir_oracle: /u01/../oracle}
+        errors: [oracle_common_patch_base_dir_oracle, "oracle_common_patch_base_dir (alias patch_folder_prefix)"]
+        count: 1
+      - name: patch staging directory with a trailing '..'
+        set: {oracle_common_patch_staging_dir: /u01/oracle/software_dir/..}
+        errors: [oracle_common_patch_staging_dir]
+      - name: path placeholder
+        set: {oracle_common_staging_base: <CHANGE_ME>}
+        errors: [oracle_common_staging_base, "still the placeholder"]
+        count: 2
+      # --- checksum -----------------------------------------------------------------------------------
+      - {name: checksum md5, set: {oracle_common_patch_checksum: "md5:{{ '0123456789abcdef' * 2 }}"}, errors: []}
+      - {name: checksum sha1, set: {oracle_common_patch_checksum: "sha1:{{ '0123456789' * 4 }}"}, errors: []}
+      - {name: checksum sha224, set: {oracle_common_patch_checksum: "sha224:{{ 'abcdef01' * 7 }}"}, errors: []}
+      - {name: checksum sha384, set: {oracle_common_patch_checksum: "sha384:{{ '0123456789abcdef' * 6 }}"}, errors: []}
+      - {name: checksum sha512 upper case, set: {oracle_common_patch_checksum: "sha512:{{ '0123456789ABCDEF' * 8 }}"}, errors: []}
+      - name: checksum https checksum-file URL
+        set: {oracle_common_patch_checksum: "sha256:https://repo.example.com/oracledatabase/19.0.0/LINUX_jan26.tar.gz.sha256"}
+        errors: []
+      - name: checksum all zeros
+        set: {oracle_common_patch_checksum: "sha256:{{ '0' * 64 }}"}
+        errors: [oracle_common_patch_checksum]
+        hidden: [oracle_common_patch_checksum]
+      - {name: checksum md5 all zeros, set: {oracle_common_patch_checksum: "md5:{{ '0' * 32 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum sha256 too short, set: {oracle_common_patch_checksum: "sha256:{{ 'a' * 63 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum sha256 too long, set: {oracle_common_patch_checksum: "sha256:{{ 'a' * 65 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum md5 with a sha256 length, set: {oracle_common_patch_checksum: "md5:{{ 'a' * 64 }}"}, errors: [oracle_common_patch_checksum]}
+      - name: checksum http checksum-file URL
+        set: {oracle_common_patch_checksum: "sha256:http://repo.example.com/x.sha256"}
+        errors: [oracle_common_patch_checksum]
+        hidden: [oracle_common_patch_checksum]
+      - {name: checksum ftp URL, set: {oracle_common_patch_checksum: "sha256:ftp://repo.example.com/x.sha256"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum bare https scheme, set: {oracle_common_patch_checksum: "sha256:https://"}, errors: [oracle_common_patch_checksum]}
+      - name: checksum placeholder
+        set: {oracle_common_patch_checksum: <CHANGE_ME>}
+        errors: [oracle_common_patch_checksum, "still the placeholder"]
+        count: 2
+      - {name: checksum empty, set: {oracle_common_patch_checksum: ""}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum trailing newline, set: {oracle_common_patch_checksum: "{{ validation_sha256 }}\n"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum upper-case algorithm, set: {oracle_common_patch_checksum: "SHA256:{{ 'a' * 64 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum unknown algorithm, set: {oracle_common_patch_checksum: "sha3:{{ 'a' * 64 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum without algorithm, set: {oracle_common_patch_checksum: "{{ 'a' * 64 }}"}, errors: [oracle_common_patch_checksum]}
+      - {name: checksum non-hex digit, set: {oracle_common_patch_checksum: "sha256:{{ 'a' * 63 }}g"}, errors: [oracle_common_patch_checksum]}
+      # --- repository URL -----------------------------------------------------------------------------
+      - name: repository URL http
+        set: {oracle_common_patch_repo_url: "http://repo.example.com/oracledatabase"}
+        errors: [oracle_common_patch_repo_url]
+        hidden: [oracle_common_patch_repo_url]
+      - name: repository URL http with the opt-in toggle
+        set: {oracle_common_patch_repo_url: "http://repo.example.com/oracledatabase", oracle_common_patch_repo_allow_http: true}
+        errors: []
+      - name: repository URL with a trailing newline
+        set: {oracle_common_patch_repo_url: "https://repo.example.com/oracledatabase\n"}
+        errors: [oracle_common_patch_repo_url]
+      - {name: repository URL empty, set: {oracle_common_patch_repo_url: ""}, errors: [oracle_common_patch_repo_url]}
+      - name: repository URL placeholder
+        set: {oracle_common_patch_repo_url: <CHANGE_ME>}
+        errors: [oracle_common_patch_repo_url, "still the placeholder"]
+        count: 2
+      - {name: repository URL ftp, set: {oracle_common_patch_repo_url: "ftp://repo.example.com/x"}, errors: [oracle_common_patch_repo_url]}
+      - {name: repository URL bare scheme, set: {oracle_common_patch_repo_url: "https://"}, errors: [oracle_common_patch_repo_url]}
+      - name: repository URL with a space
+        set: {oracle_common_patch_repo_url: "https://repo.example.com/a b"}
+        errors: [oracle_common_patch_repo_url]
+        hidden: [oracle_common_patch_repo_url]
+      # --- group --------------------------------------------------------------------------------------
+      - {name: group name missing, set: {oracle_common_group_name: ""}, errors: [oracle_common_group_name]}
+      - name: group name not needed when membership is not managed
+        set: {oracle_common_group_name: "", oracle_common_manage_group_membership: false}
+        errors: []
+      - {name: group name with a space, set: {oracle_common_group_name: "bad group"}, errors: [oracle_common_group_name]}
+      - name: group name placeholder
+        set: {oracle_common_group_name: <CHANGE_ME>}
+        errors: [oracle_common_group_name, "still the placeholder"]
+        count: 2
+      # --- layout, patch naming, booleans --------------------------------------------------------------
+      - {name: grid layout not a boolean, set: {oracle_common_is_grid_layout: maybe}, errors: [oracle_common_is_grid_layout]}
+      - {name: grid layout boolean true, set: {oracle_common_is_grid_layout: true}, errors: []}
+      - {name: grid layout legacy string true, set: {oracle_common_is_grid_layout: "true"}, errors: []}
+      - {name: patch cycle with punctuation, set: {oracle_common_patch_cycle: "jan!"}, errors: [oracle_common_patch_cycle]}
+      - {name: patch cycle empty, set: {oracle_common_patch_cycle: ""}, errors: [oracle_common_patch_cycle]}
+      - {name: patch year not digits, set: {oracle_common_patch_year: 2026x}, errors: [oracle_common_patch_year]}
+      - {name: patch year four digits, set: {oracle_common_patch_year: "2026"}, errors: []}
+      - {name: patch file name with a directory, set: {oracle_common_patch_file_name: ../x.tar.gz}, errors: [oracle_common_patch_file_name]}
+      - {name: patch file name with a space, set: {oracle_common_patch_file_name: a b.tar.gz}, errors: [oracle_common_patch_file_name]}
+      - {name: patch file name hidden, set: {oracle_common_patch_file_name: .hidden}, errors: [oracle_common_patch_file_name]}
+      - {name: patch file name explicit, set: {oracle_common_patch_file_name: LINUX_apr26.tar.gz}, errors: []}
+      - {name: package check toggle not a boolean, set: {oracle_common_check_packages: maybe}, errors: [oracle_common_check_packages]}
+      # --- several problems at once are all reported -------------------------------------------------
+      - name: several invalid inputs
+        set: {DATABASE_NAME: 1ORCL, oracle_common_patch_checksum: "sha256:{{ '0' * 64 }}", oracle_common_script_permission: 511}
+        errors: ["DATABASE_NAME:", oracle_common_patch_checksum, "got 0777"]
+        count: 3
+      # --- the example inventory ships placeholders that must be rejected ----------------------------
+      - name: example inventory placeholders
+        set:
+          oracle_common_patch_repo_url: "{{ validation_example.oracle_common_patch_repo_url }}"
+          oracle_common_patch_checksum: "{{ validation_example.oracle_common_patch_checksum }}"
+          oracle_common_group_name: "{{ validation_example.oracle_common_group_name }}"
+        errors: [oracle_common_patch_repo_url, oracle_common_patch_checksum, oracle_common_group_name, "still the placeholder"]
+        count: 4
+  tasks:
+    - name: Start every case from the valid inputs
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ item.value }}"
+      loop: "{{ validation_baseline | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Run the validation cases
+      ansible.builtin.include_tasks: tasks/validation_case.yml
+      loop: "{{ validation_cases }}"
+      loop_control:
+        loop_var: validation_case
+        label: "{{ validation_case.name }}"

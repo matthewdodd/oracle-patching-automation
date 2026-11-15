@@ -1,0 +1,36 @@
+---
+# One package-check case: run the real roles/oracle_common tasks/packages.yml with a simulated AIX host whose
+# fileset query command is /bin/echo printing a fixed `lslpp -Lc`-style listing (read-only, nothing installed or
+# queried), then compare the outcome and the reported missing packages with the expectation.
+- name: Run the package check ({{ package_case.name }})
+  block:
+    - name: Reset the outcome of the previous case
+      ansible.builtin.set_fact:
+        package_case_failed: false
+        package_case_message: ""
+
+    - name: Check the prerequisite packages
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: packages
+        ansible_facts: {system: AIX, os_family: AIX, distribution: AIX, distribution_major_version: "7", distribution_version: "7.2"}
+        oracle_common_check_packages: "{{ package_case.check | default(true) }}"
+        oracle_common_package_manager: ""
+        oracle_common_package_query_command: "{{ package_case.command | default(['/bin/echo', package_listing]) }}"
+        oracle_common_package_query_regex: '(?m)^[^#:\s][^:]*:([^:]+):'
+        oracle_common_prereq_packages: "{{ package_case.packages }}"
+  rescue:
+    - name: Note the failure
+      ansible.builtin.set_fact:
+        package_case_failed: true
+        package_case_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Check the outcome ({{ package_case.name }})
+  ansible.builtin.assert:
+    that:
+      - package_case_failed == package_case.fails
+      - package_case.message | default('') in package_case_message
+    fail_msg: >-
+      failed {{ package_case_failed }} (expected {{ package_case.fails }}); message "{{ package_case_message }}"
+      (expected to contain "{{ package_case.message | default('') }}")
+    quiet: true

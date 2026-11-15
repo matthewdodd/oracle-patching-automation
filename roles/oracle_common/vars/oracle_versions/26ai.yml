@@ -1,0 +1,29 @@
+---
+# Oracle AI Database 26ai. One entry of the supported-version registry built by tasks/oracle_version.yml, keyed by this file's
+# name (26ai). Adding an Oracle version means adding one such file. Any value can be overridden per environment
+# without editing this file: oracle_common_oracle_version_overrides: {"26ai": {<key>: <value>}}.
+# All values sit under one key so the file is also safe to load with include_vars.
+__oracle_common_version_definition:
+  label: Oracle AI Database 26ai
+  # UNVERIFIED defaults (no 26ai host was available): confirm them on a real host and override if needed.
+  # Detected version that selects this entry automatically: a version_full of release update 23.26 or later
+  # (e.g. 23.26.0.0.0), or a version reported as 26.x. A database that reports only 23.0.0.0.0 is detected as
+  # 23ai: set oracle_common_db_version (alias oracle_patch_db_version) to 26ai for such hosts.
+  match_regex: '\A(?:23\.(?:2[6-9]|[3-9][0-9])|26)(?:\.[0-9]+)*\Z'
+  # Detected versions accepted when this entry is selected explicitly (oracle_common_db_version).
+  accept_regex: '\A2[36](?:\.[0-9]+)*\Z'
+  # Folder of this release in the patch repository (same naming scheme as 19.0.0).
+  artifact_dir: "26.0.0"
+  # Version component of the patch staging directory.
+  staging_component: "26ai"
+  # README.html patterns (grep basic regular expressions) that identify the Release Update folder and the OJVM
+  # folder of the patch bundle, and how many README lines must match the OJVM pattern (the original: more than 1).
+  # UNVERIFIED: the 19c README wording is assumed (see 23ai.yml).
+  readme_ru_pattern: 'Database * Release Update'
+  readme_jvm_pattern: '\- Oracle JavaVM Component'
+  readme_jvm_min_matches: 2
+  # AIX only: rewrite $ORACLE_HOME/QOpatch/qopiprep.bat to use ksh93 (12.1 only).
+  qopiprep_fix: false
+  # How datapatch runs: upgrade (the original behaviour for every version, kept as the default) or normal.
+  datapatch_startup_mode: upgrade
+  desupported: false

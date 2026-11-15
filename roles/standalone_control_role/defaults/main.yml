@@ -1,2 +1,37 @@
 ---
-# ansible_ssh_user:
+# Defaults for standalone_control_role (moved from vars/main.yml so inventories can override them).
+#
+# The working directories and the script mode come from oracle_common, which the playbook runs first:
+# remote_script_directory / remote_output_directory (oracle_common_remote_*_directory, set as facts by
+# initialization_role) and oracle_common_modes.script (oracle_common_script_permission, alias script_permission;
+# 0777 is no longer allowed). The connection user comes from the inventory (ansible_user).
+
+standalone_control_role_role_version: v1.0.0
+
+# Accepted but unused (as in the original): seconds to pause between control steps. The original name
+# timeToPause is accepted as an alias.
+standalone_control_role_time_to_pause: "{{ timeToPause | default(120) }}"
+
+# Accepted but unused (as in the original). The original names remote_script_directory_base and
+# remote_output_directory_base are accepted as aliases.
+standalone_control_role_remote_script_directory_base: >-
+  {{ remote_script_directory_base | default('/tmp/ora_ansible_scripts_' ~ (DATABASE_NAME | default(''))) }}
+standalone_control_role_remote_output_directory_base: "{{ remote_output_directory_base | default('~/ansiblescripts/startup/log') }}"
+
+# Script file names (roles/standalone_control_role/files/). The names below are the original variable names
+# the tasks use; each can be overridden from the inventory.
+check_mount_script: check_mount.bash
+check_timestamp_script: check_timestamp.bash
+check_alertLog_script: check_alert_log.bash
+check_listenerLogs_script: check_listener_logs.bash
+rename_logs_script: rename_logs.bash
+start_database_script: database_ctl.bash
+start_listener_script: listener_ctl.bash
+start_pdb_script: pdb_ctl.bash
+# pdb_listener_ctl.bash never existed; the PDB listener is started with listener_ctl.bash
+# (see start_pdb_listener.yml). The name is kept as an accepted variable.
+start_pdbListener_script: listener_ctl.bash
+stop_pdb_script: pdb_ctl.bash
+stop_pdbListener_script: listener_ctl.bash
+stop_database_script: database_ctl.bash
+stop_listener_script: listener_ctl.bash

@@ -1,0 +1,32 @@
+---
+# One alias validation case, included with the case's inputs as include vars (scoped to this include, so nothing
+# leaks into the next case): run the real roles/oracle_common tasks/validate.yml and check that it is rejected
+# (alias_case_rejected true) with the expected text, or accepted. The error lists are reset to a sentinel first.
+- name: Reset the validation outcome ({{ alias_case_name }})
+  ansible.builtin.set_fact:
+    __oracle_common_job_errors: [__alias_case_not_run__]
+    __oracle_common_config_errors: [__alias_case_not_run__]
+
+- name: Run the validation ({{ alias_case_name }})
+  block:
+    - name: Validate the inputs and the configuration
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: validate
+  rescue:
+    - name: Note the rejection (checked below)
+      ansible.builtin.debug:
+        msg: "validate.yml rejected the inputs of case '{{ alias_case_name }}'"
+
+- name: Check the outcome ({{ alias_case_name }})
+  ansible.builtin.assert:
+    that:
+      - "'__alias_case_not_run__' not in __alias_case_errors"
+      - (__alias_case_errors | length > 0) == (alias_case_rejected | bool)
+      - alias_case_expected | default([]) | reject('in', __alias_case_errors | join('\n')) | list | length == 0
+    fail_msg: >-
+      case '{{ alias_case_name }}': expected {{ 'a rejection' if (alias_case_rejected | bool) else 'no error' }}
+      with text {{ alias_case_expected | default([]) }}; errors: {{ __alias_case_errors }}
+    quiet: true
+  vars:
+    __alias_case_errors: "{{ __oracle_common_job_errors + __oracle_common_config_errors }}"

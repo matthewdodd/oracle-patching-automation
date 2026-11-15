@@ -15,15 +15,18 @@
       ansible.builtin.file:
         path: "{{ temp_dir }}"
         state: directory
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.script }}"
 
-    - name: Download {{ artf_file_name }} from {{ artifactory_repo }} to {{ download_dir }}
+    # The repository folder (oracle_common_patch_repo_url, alias artifactory_repo, plus the release folder) is
+    # resolved and checked by oracle_common (tasks/patch_artifact.yml); it is not shown in the task name because
+    # it may carry credentials.
+    - name: Download {{ artf_file_name }} to {{ download_dir }}
       ansible.builtin.get_url:
-        url: '{{ artifactory_repo }}/{{ artf_file_name }}'
+        url: '{{ oracle_common_patch.repo_dir_url }}/{{ artf_file_name }}'
         dest: '{{ download_dir }}/{{ artf_file_name }}'
         validate_certs: false
         force_basic_auth: true
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.script }}"
         tmp_dest: "{{ temp_dir }}"
         use_proxy: false
 
@@ -59,4 +62,4 @@
         path: "{{ temp_dir }}"
         state: directory
         recurse: true
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.script }}"

@@ -1,53 +1,18 @@
 ---
+# The working directories come from oracle_common (defaults/main/staging.yml; aliases remote_script_directory
+# and remote_output_directory), which the playbook runs before this role.
 - set_fact:
     ORACLE_SID: "{{ DATABASE_NAME }}"
-    remote_script_directory: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
-    remote_output_directory: "/tmp/ora_db_patch_{{ DATABASE_NAME }}"
+    remote_script_directory: "{{ oracle_common_remote_script_directory }}"
+    remote_output_directory: "{{ oracle_common_remote_output_directory }}"
     missing_packages: []
 
-- name: Gather the package facts
-  ansible.builtin.package_facts:
-    manager: rpm
-
+# Package list per OS release from the oracle_common OS variable files (RedHat-8/9/10.yml); package facts are
+# gathered only where an rpm package manager is configured (not on AIX).
 - name: Check whether pre-requisite packages are installed
-  set_fact:
-    missing_packages: "{{ missing_packages + [ item ] }}"
-  when:
-    - item not in ansible_facts.packages
-    - ansible_distribution == "RedHat"
-  with_items:
-    - bc
-    - binutils
-    - compat-libcap1
-    - compat-libstdc++-33
-    - elfutils-libelf
-    - elfutils-libelf-devel
-    - fontconfig-devel
-    - glibc
-    - glibc-devel
-    - ksh
-    - libaio
-    - libaio-devel
-    - libX11
-    - libXau
-    - libXi
-    - libXtst
-    - libXrender
-    - libXrender-devel
-    - libgcc
-    - libstdc++
-    - libstdc++-devel
-    - libxcb
-    - make
-    - smartmontools
-    - sysstat
-    - xorg-x11-xauth
-    # - xorg-x11-utils
-
-- name: Fail if list is longer than none
-  fail:
-    msg: "Missing package; FAIL DUE TO THESE PACKAGES NOT BEING FOUND: {{ missing_packages }}"
-  when: missing_packages|length>0
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: packages
 
 - name: Init Clean
   block:
@@ -68,6 +33,7 @@
       failed_when: shell_output.stdout != sid_server_dict[ORACLE_SID].dbowner
 
 - name: Add member to group
+  when: oracle_common_manage_group_membership | bool
   block:
     - name: Add member to group
       include_tasks: group_membership.yml
@@ -82,29 +48,20 @@
       ansible.builtin.file:
         path: "{{ remote_script_directory }}"
         state: directory
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.script }}"
 
     - name: Create roles/oracle_database_patch_role/files if not exist
       copy:
         # role_path-based so the source does not depend on the playbook directory.
         src: "{{ role_path }}/../oracle_database_patch_role/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.script }}"
 
     - name: Create {{ remote_output_directory }}
       ansible.builtin.file:
         path: "{{ remote_output_directory }}"
         state: directory
-        mode: "{{ script_permission }}"
-
-    - set_fact:
-        patch_file_prefix: "{{ 'AIX' if ansible_distribution == 'AIX' else 'LINUX' }}"
-
-    - set_fact:
-        patch_file_name: "{{ patch_file_prefix }}_jan{{ (ansible_date_time.year|string)[-2:] }}.tar.gz"
-
-    - debug:
-        msg: "The patch_file_name is: {{ patch_file_name }}"
+        mode: "{{ oracle_common_modes.script }}"
 
     - name: Get database version
       shell: |
@@ -114,54 +71,54 @@
 
     - name: Ingest database version information
       ansible.builtin.slurp:
-        src: "/tmp/ora_db_patch_{{ ORACLE_SID }}/db_version.txt"
+        src: "{{ remote_output_directory }}/db_version.txt"
       register: db_ver_slurp
 
     - set_fact:
         db_ver_long: "{{ db_ver_slurp['content']|b64decode|trim }}"
 
+    # Selects the vars/oracle_versions/<version>.yml entry of oracle_common for the detected version (12.1,
+    # 12.2, 19, 23ai, 26ai); an unknown version stops here instead of falling back to the 12.1 artifacts.
+    - name: Select the Oracle version
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: oracle_version_select
+      vars:
+        oracle_common_detected_version: "{{ db_ver_long }}"
+
     - set_fact:
         db_ver: "{{ db_ver_long[:4] }}"
 
     - set_fact:
-        artf_ver: "{{ '19.0.0' if db_ver == '19.0' else ( '12.2.0.1' if db_ver == '12.2' else '12.1.0.2' ) }}"
+        artf_ver: "{{ oracle_common_oracle_version.artifact_dir }}"
 
-    # artifactory_repo is a job input: the base URL of the patch repository directory for this
-    # database version (artf_ver above gives the version directory, e.g. .../19.0.0). It used to be
-    # derived from a hard-coded site URL (now removed); supply it through the inventory or -e.
-    - name: Check that artifactory_repo was supplied
-      ansible.builtin.assert:
-        that:
-          - artifactory_repo is defined
-          - artifactory_repo | string | trim | length > 0
-        fail_msg: >-
-          artifactory_repo is required: the base URL of the patch repository for this database
-          version ({{ artf_ver }}), e.g. -e artifactory_repo=https://repo.example.com/oracledatabase/{{ artf_ver }}
-        quiet: true
+    # Resolves the patch file name (<AIX|LINUX>_<cycle><year>.tar.gz by default, the original
+    # <AIX|LINUX>_jan<YY>.tar.gz), the repository URL (oracle_common_patch_repo_url, alias artifactory_repo; required),
+    # the staging directory and its owner, and compares the repository release folder with the detected version
+    # (replaces the original fixed-offset "Check for Sanity").
+    - name: Resolve the patch bundle and check for sanity
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: patch_artifact
+
+    - set_fact:
+        patch_file_prefix: "{{ oracle_common_artifact_platform }}"
+
+    - set_fact:
+        patch_file_name: "{{ oracle_common_patch.file_name }}"
 
     - debug:
-        msg: "The artifactory_repo is: {{ artifactory_repo }}"
+        msg: "The patch_file_name is: {{ patch_file_name }}"
 
     - set_fact:
-        patch_folder_prefix: "{{ '/u01/oracle' if is_grid_layout == 'false' else '/u02/grid' }}"
-        b_user: "{{ 'oracle' if is_grid_layout == 'false' else 'grid' }}"
+        patch_folder_prefix: "{{ oracle_common_patch.base_dir }}"
+        b_user: "{{ oracle_common_patch.owner }}"
 
     - set_fact:
-        patch_folder_name: "{{ patch_folder_prefix }}/software_dir/{{ db_ver }}/jan{{ (ansible_date_time.year|string)[-2:] }}_{{ ORACLE_SID }}"
-
-    - name: Check for Sanity
-      block:
-        - set_fact:
-            # repo_check: "{{ artifactory_repo[81:85] }}"
-            repo_check: "{{ artifactory_repo[83:87] }}"
-            folder_check: "{{ patch_folder_name[40:44] }}"
-
-        - name: Fail if the repository and folder versions do not match
-          fail:
-            msg: "Repo ({{ repo_check }}) and folder ({{ folder_check }}) version mismatch. Validate and retry"
-          when: repo_check != folder_check
+        patch_folder_name: "{{ oracle_common_patch.staging_dir }}"
 
 - name: Add member to group
+  when: oracle_common_manage_group_membership | bool
   block:
     - name: Add member to group
       include_tasks: group_membership.yml

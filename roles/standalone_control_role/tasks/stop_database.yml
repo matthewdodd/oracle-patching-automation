@@ -5,7 +5,7 @@
   copy:
     src: "{{ stop_database_script }}"
     dest: "{{ remote_script_directory }}/{{ stop_database_script }}"
-    mode: "{{script_permission}}"
+    mode: "{{ oracle_common_modes.script }}"
     force: true
   delegate_to: "{{ server_name }}"
 

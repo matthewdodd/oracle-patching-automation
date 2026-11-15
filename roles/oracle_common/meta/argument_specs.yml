@@ -1,0 +1,220 @@
+---
+# Variable reference for the shared configuration. Defaults live in ../defaults/main/*.yml (one file per
+# concern); tasks/validate_job.yml and tasks/validate.yml apply the format checks that argument specs cannot
+# express (anchored patterns, the '..' path rule, mode normalisation, checksum format, "<CHANGE_ME>").
+argument_specs:
+  main:
+    short_description: Guard the platform, load per-OS and per-version variables, and validate every input.
+    description:
+      - Refuses unsupported platforms (EL7 and older, Amazon Linux 2, kernels other than Linux and AIX), naming
+        the actual distribution and version.
+      - Loads vars/<system>.yml, <os_family>.yml, <distribution>.yml, <os_family>-<major>.yml and
+        <distribution>-<major>.yml (generic first, most specific last).
+      - Loads the supported Oracle versions, one file each in vars/oracle_versions/ (12.1, 12.2, 19, 23ai, 26ai).
+      - Validates the job inputs and the environment configuration, reporting every problem at once.
+      - Must run (import_role) at the start of the target play, before initialization_role. The target plays set
+        gather_facts false - this role reads the OS release without Python first (EL7 and Amazon Linux 2 cannot run
+        ansible-core 2.22 modules), then gathers the facts.
+      - Derived values, overridable but not listed as options because their defaults are templates -
+        oracle_common_remote_script_directory (alias remote_script_directory; <oracle_common_staging_base>/ora_ansible_scripts_<DATABASE_NAME>),
+        oracle_common_remote_output_directory (alias remote_output_directory; <oracle_common_staging_base>/ora_db_patch_<DATABASE_NAME>),
+        oracle_common_env_file (<oracle_common_env_dir>/<DATABASE_NAME>.env),
+        oracle_common_patch_year (alias oracle_patch_year; last two digits of the target's year),
+        oracle_common_patch_base_dir (alias patch_folder_prefix; selected by oracle_common_is_grid_layout),
+        oracle_common_patch_owner (alias b_user; selected by oracle_common_is_grid_layout).
+      - Per-OS values from vars/<os>.yml (oracle_common_artifact_platform, oracle_common_package_manager,
+        oracle_common_package_query_command, oracle_common_package_query_regex, oracle_common_prereq_packages)
+        can be overridden per host or group; they are not listed because they are only known after the OS
+        variables are loaded.
+    options:
+      target:
+        type: str
+        required: true
+        description: Comma or space separated list of target hosts (AAP survey / extra var). Each must be a host name or IP address.
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch; key into sid_server_dict. Must fully match [A-Za-z][A-Za-z0-9_]{0,29}.
+      sid_server_dict:
+        type: dict
+        required: true
+        description:
+          - Inventory dictionary of databases keyed by ORACLE_SID, each with dbowner (POSIX user), pdb, dbvip,
+            dbListener and pdbListener. See inventory/example/group_vars/all/main.yml.
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number (e.g. CHG0030001). Validated with oracle_common_ticket_number_regex when supplied.
+      override_chg:
+        type: raw
+        description: Skip the ServiceNow change check. Boolean; the legacy strings "true" / "false" are accepted.
+      oracle_common_ticket_number_regex:
+        type: str
+        default: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+        description: Python regex for TICKET_NUMBER, anchored with \A ... \Z.
+      oracle_common_ticket_required:
+        type: bool
+        default: false
+        description: Require TICKET_NUMBER.
+      oracle_common_patch_repo_url:
+        type: str
+        description:
+          - Required. https base URL of the patch repository. Defaults to artifactory_repo (the original input name).
+          - The release folder (artifact_dir of the version, e.g. 19.0.0) is appended unless
+            oracle_common_patch_repo_version_subdir is false or the URL already ends with it.
+      artifactory_repo:
+        type: str
+        description: Original name of oracle_common_patch_repo_url, still accepted. It names the release folder, so nothing is appended to it.
+      oracle_common_patch_repo_version_subdir:
+        type: raw
+        description: Append the release folder to the repository URL. Default true, or false when artifactory_repo is supplied.
+      oracle_common_patch_repo_version_check:
+        type: bool
+        default: true
+        description: The repository folder must be the release folder of the detected database version (replaces the original fixed-offset check).
+      oracle_common_patch_repo_allow_http:
+        type: bool
+        default: false
+        description: Opt-in only. Accept a plain http repository URL.
+      oracle_common_patch_checksum:
+        type: str
+        description:
+          - Required. Checksum of the patch bundle - <algorithm>:<hex digest> (md5, sha1, sha224, sha256, sha384 or
+            sha512 with that algorithm's exact digest length, not all zeros) or <algorithm>:<https URL of a checksum file>.
+          - Alias oracle_patch_checksum.
+      oracle_common_patch_cycle:
+        type: str
+        description: Patch cycle in the default file name <AIX|LINUX>_<cycle><year>.tar.gz. Default jan (the original). Alias oracle_patch_cycle.
+      oracle_common_patch_file_name:
+        type: str
+        description: Explicit patch bundle file name, overriding the derived one. Aliases oracle_patch_file_name and patch_file_name.
+      oracle_common_patch_staging_dir:
+        type: str
+        description: Explicit patch staging directory. Empty derives <base_dir>/software_dir/<version>/<cycle><year>_<SID>. Alias patch_folder_name.
+      oracle_common_is_grid_layout:
+        type: raw
+        description: Grid layout (true) or Oracle layout (false, the default). Alias is_grid_layout; the legacy strings "true" / "false" are accepted.
+      is_grid_layout:
+        type: raw
+        description: Original name of oracle_common_is_grid_layout, still accepted.
+      oracle_common_patch_base_dir_oracle:
+        type: str
+        default: /u01/oracle
+        description: Patch base directory for the Oracle layout.
+      oracle_common_patch_base_dir_grid:
+        type: str
+        default: /u02/grid
+        description: Patch base directory for the Grid layout.
+      oracle_common_patch_owner_oracle:
+        type: str
+        default: oracle
+        description: Owner of the staged patch for the Oracle layout.
+      oracle_common_patch_owner_grid:
+        type: str
+        default: grid
+        description: Owner of the staged patch for the Grid layout.
+      oracle_common_staging_base:
+        type: str
+        default: /tmp
+        description: Base of the per-database script and output directories.
+      oracle_common_script_permission:
+        type: raw
+        description:
+          - Mode of the copied scripts and working directories. Default "0755". Alias script_permission.
+          - Group- or world-writable modes (such as 0777) are rejected.
+      script_permission:
+        type: raw
+        description: Original name of oracle_common_script_permission, still accepted (0777 is no longer allowed).
+      oracle_common_env_dir:
+        type: str
+        default: /local
+        description: Directory of the <SID>.env environment files.
+      oracle_common_manage_group_membership:
+        type: bool
+        default: true
+        description: Add the database owner and the patch staging owner to oracle_common_group_name.
+      oracle_common_group_name:
+        type: str
+        description: Required while oracle_common_manage_group_membership is true. Alias GROUP_NAME.
+      GROUP_NAME:
+        type: str
+        description: Original name of oracle_common_group_name, still accepted.
+      oracle_common_oracle_version_overrides:
+        type: dict
+        default: {}
+        description: Per-environment overrides of the per-version values, keyed by version (12.1, 12.2, 19, 23ai, 26ai).
+      oracle_common_db_version:
+        type: str
+        description: Use this version entry instead of detecting it (e.g. 26ai). Alias oracle_patch_db_version.
+      oracle_common_supported_systems:
+        type: list
+        elements: str
+        default: [Linux, AIX]
+        description: Kernel names (ansible_facts.system) that are supported.
+      oracle_common_check_packages:
+        type: bool
+        default: true
+        description: Check the prerequisite packages of the OS release.
+
+  validate_job:
+    short_description: Validate the job inputs only (no facts needed; used on localhost before the change check).
+    options:
+      target:
+        type: str
+        required: true
+        description: Comma or space separated list of target hosts.
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch.
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID.
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number.
+      override_chg:
+        type: raw
+        description: Skip the ServiceNow change check (boolean or legacy "true" / "false" string).
+
+  guard:
+    short_description: Refuse unsupported platforms (EL7 and older, Amazon Linux 2, unsupported kernels).
+    description:
+      - When no facts have been gathered, first reads the OS release without Python (static raw command) and refuses
+        EL7 and older and Amazon Linux 2 (guard_os_release.yml), then gathers the facts and checks them.
+    options: {}
+
+  guard_os_release:
+    short_description: Refuse EL7 and older and Amazon Linux 2 from the text of uname -s and /etc/os-release, without Python.
+    options:
+      oracle_common_os_release_text:
+        type: str
+        description: Output of `uname -s; cat /etc/os-release; cat /etc/redhat-release` on the target.
+
+  os_vars:
+    short_description: Load the layered OS variable files. Needs facts.
+    options: {}
+
+  oracle_version:
+    short_description: Build the registry of supported Oracle versions from vars/oracle_versions/*.yml.
+    options: {}
+
+  oracle_version_select:
+    short_description: Select the supported-version entry for the detected database version.
+    options:
+      oracle_common_detected_version:
+        type: str
+        required: true
+        description: Version reported by the database, e.g. 19.0.0.0.0 or a version_full such as 23.26.0.0.0.
+
+  patch_artifact:
+    short_description: Resolve the patch bundle file name, repository URL and staging directory, and check the repository release folder.
+    options: {}
+
+  validate:
+    short_description: Validate the job inputs and the environment configuration.
+    options: {}
+
+  packages:
+    short_description: Check the prerequisite packages (AIX - filesets) of the OS release.
+    options: {}

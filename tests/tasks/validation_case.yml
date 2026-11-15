@@ -1,0 +1,53 @@
+---
+# One validation case: set the case's inputs as facts (they win over the play's vars files and the role
+# defaults), run the real roles/oracle_common tasks/validate.yml, compare the errors with the expectation, then
+# restore every changed input from validation_baseline. count is the exact number of error messages expected
+# (default: 0 for a valid case, 1 otherwise); errors lists text that must appear in them; hidden lists inputs whose
+# value must not be echoed. The error lists are reset to a sentinel first, so a case can never pass on the errors
+# of the previous case (or without the validation having run).
+- name: Reset the validation outcome ({{ validation_case.name }})
+  ansible.builtin.set_fact:
+    __oracle_common_job_errors: [__validation_case_not_run__]
+    __oracle_common_config_errors: [__validation_case_not_run__]
+
+- name: Set the inputs of this case ({{ validation_case.name }})
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ item.value }}"
+  loop: "{{ validation_case.set | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Run the validation ({{ validation_case.name }})
+  block:
+    - name: Validate the inputs and the configuration
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: validate
+  rescue:
+    - name: Note the rejection (checked below)
+      ansible.builtin.debug:
+        msg: "validate.yml rejected the inputs of case '{{ validation_case.name }}'"
+
+- name: Check the outcome ({{ validation_case.name }})
+  ansible.builtin.assert:
+    that:
+      - "'__validation_case_not_run__' not in __validation_case_errors"
+      - __validation_case_errors | length == validation_case.count | default([validation_case.errors | default([]) | length, 1] | min)
+      - validation_case.errors | default([]) | reject('in', __validation_case_text) | list | length == 0
+      - validation_case.hidden | default([]) | map('extract', validation_case.set) | map('string') | select('in', __validation_case_text) | list | length == 0
+    fail_msg: >-
+      case '{{ validation_case.name }}': got {{ __validation_case_errors | length }} error(s)
+      (expected {{ validation_case.count | default([validation_case.errors | default([]) | length, 1] | min) }});
+      expected text not found: {{ validation_case.errors | default([]) | reject('in', __validation_case_text) | list }};
+      errors: {{ __validation_case_errors }}
+    quiet: true
+  vars:
+    __validation_case_errors: "{{ __oracle_common_job_errors + __oracle_common_config_errors }}"
+    __validation_case_text: "{{ __validation_case_errors | join('\n') }}"
+
+- name: Restore the inputs changed by this case ({{ validation_case.name }})
+  ansible.builtin.set_fact:
+    "{{ item.key }}": "{{ validation_baseline[item.key] }}"
+  loop: "{{ validation_case.set | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

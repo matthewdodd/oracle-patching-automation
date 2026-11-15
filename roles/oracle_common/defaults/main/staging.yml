@@ -1,0 +1,14 @@
+---
+# Per-database working directories on the target. Defaults reproduce the original paths
+# (/tmp/ora_ansible_scripts_<SID> and /tmp/ora_db_patch_<SID>). The original names remote_script_directory
+# and remote_output_directory are accepted as aliases.
+#
+# Base directory of both working directories.
+oracle_common_staging_base: /tmp
+# Scripts copied to the host.
+oracle_common_remote_script_directory: >-
+  {{ remote_script_directory | default(oracle_common_staging_base ~ '/ora_ansible_scripts_' ~ (DATABASE_NAME | default(''))) }}
+# Logs and script output. NOTE: the bundled database_patch.bash and database_version.bash still write their
+# output to /tmp/ora_db_patch_<SID>; keep this default until those scripts take the directory as an input.
+oracle_common_remote_output_directory: >-
+  {{ remote_output_directory | default(oracle_common_staging_base ~ '/ora_db_patch_' ~ (DATABASE_NAME | default(''))) }}

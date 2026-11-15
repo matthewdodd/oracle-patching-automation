@@ -28,6 +28,24 @@
   hosts: localhost
   gather_facts: false
   pre_tasks:
+    # Validate the job inputs (target, DATABASE_NAME, TICKET_NUMBER, override_chg, sid_server_dict entry) before
+    # anything else runs: anchored patterns, "<CHANGE_ME>" placeholders rejected (roles/oracle_common).
+    - name: Validate the job inputs
+      block:
+        - name: Validate the job inputs
+          ansible.builtin.import_role:
+            name: oracle_common
+            tasks_from: validate_job
+      rescue:
+        - name: Send the failure notification
+          ansible.builtin.include_tasks: notification.yml
+          vars:
+            call: "fail"
+            summary_state: "patching"
+        - name: Fail on invalid job inputs
+          ansible.builtin.fail:
+            msg: "Fail"
+
     - name: Send Starting Notification
       include_tasks: notification.yml
       vars:
@@ -70,7 +88,30 @@
 - name: Full Database Patching Playbook - Tasks
   # The default only keeps the play parseable when target is missing; play 1 fails first with a clear message.
   hosts: "{{ target | default('') }}"
+  # Facts are gathered by oracle_common after a Python-free check of the OS release: gathering them here would
+  # fail on EL7 / Amazon Linux 2 (no Python 3.9+ for ansible-core 2.22) before the guard could name the release.
+  gather_facts: false
   tasks:
+    # First, before anything changes on the host: refuse unsupported platforms (EL7, Amazon Linux 2), gather facts,
+    # load the per-OS variables and the supported Oracle versions, and validate every input (roles/oracle_common).
+    - name: Load the common configuration and validate the inputs
+      block:
+        - name: Load the common configuration and validate the inputs
+          ansible.builtin.import_role:
+            name: oracle_common
+      rescue:
+        - name: Report the common configuration failure
+          delegate_to: 127.0.0.1
+          block:
+            - name: Send the failure notification
+              ansible.builtin.include_tasks: notification.yml
+              vars:
+                call: "fail"
+                summary_state: "patching"
+            - name: Fail on an unsupported platform or invalid inputs
+              ansible.builtin.fail:
+                msg: "Fail"
+
     - name: Initialize
       block:
         - name: Initialize

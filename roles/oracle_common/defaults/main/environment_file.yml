@@ -1,0 +1,5 @@
+---
+# Oracle environment file sourced for each database (the original scripts source /local/<SID>.env).
+# Directory and full path are overridable per environment; the path must be absolute and contain no '..'.
+oracle_common_env_dir: /local
+oracle_common_env_file: "{{ oracle_common_env_dir }}/{{ DATABASE_NAME | default('') }}.env"

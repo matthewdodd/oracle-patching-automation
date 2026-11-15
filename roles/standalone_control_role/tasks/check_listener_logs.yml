@@ -6,7 +6,7 @@
   copy:
     src: "{{ check_listenerLogs_script }}"
     dest: "{{ remote_script_directory }}/{{ check_listenerLogs_script }}"
-    mode: "{{script_permission}}"
+    mode: "{{ oracle_common_modes.script }}"
     force: true
   delegate_to: "{{ server_name }}"
 

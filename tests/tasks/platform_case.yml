@@ -1,0 +1,57 @@
+---
+# One platform case: run the real roles/oracle_common tasks/guard.yml and tasks/os_vars.yml with simulated facts
+# (task vars override the gathered ansible_facts), then compare the outcome (refused or accepted) and, when
+# accepted, the values loaded with those in the expected OS files. The OS values are reset to sentinels first.
+- name: Run the oracle_common platform checks ({{ platform_case.name }})
+  block:
+    - name: Reset the outcome of the previous case
+      ansible.builtin.set_fact:
+        platform_case_refused: false
+        platform_case_message: ""
+
+    - name: Reset the OS values loaded by the previous case
+      ansible.builtin.include_vars:
+        file: ../vars/platform_case_reset.yml
+
+    - name: Refuse unsupported platforms
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: guard
+        ansible_facts: "{{ platform_case.facts }}"
+
+    - name: Load the OS variables
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: os_vars
+        ansible_facts: "{{ platform_case.facts }}"
+  rescue:
+    - name: Note the refusal
+      ansible.builtin.set_fact:
+        platform_case_refused: true
+        platform_case_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Check the outcome ({{ platform_case.name }})
+  ansible.builtin.assert:
+    that:
+      - platform_case_refused == platform_case.refused
+      - not platform_case.refused or (platform_case.message in platform_case_message)
+      - platform_case.refused or (__oracle_common_prereq_packages == __platform_case_expected.packages)
+      - platform_case.refused or (__oracle_common_artifact_platform == __platform_case_expected.platform)
+      - platform_case.refused or (__oracle_common_package_manager == __platform_case_expected.manager)
+      - platform_case.refused or ((__oracle_common_prereq_packages | length > 0) == (platform_case.has_packages | default(true)))
+    fail_msg: >-
+      refused {{ platform_case_refused }} (expected {{ platform_case.refused }}); message "{{ platform_case_message }}";
+      loaded platform {{ __oracle_common_artifact_platform }}, manager '{{ __oracle_common_package_manager }}',
+      {{ __oracle_common_prereq_packages | length }} packages (expected {{ __platform_case_expected }})
+    quiet: true
+  vars:
+    # Expected values: the most specific file wins, the generic files supply the rest.
+    __platform_case_files: >-
+      {{ query('ansible.builtin.file', *((platform_case.files | default([]))
+               | map('regex_replace', '\A(.*)\Z', playbook_dir ~ '/../roles/oracle_common/vars/\1') | list))
+         | map('from_yaml') | list }}
+    __platform_case_merged: "{{ {} | combine(*__platform_case_files) if (__platform_case_files | length > 0) else {} }}"
+    __platform_case_expected:
+      packages: "{{ __platform_case_merged['__oracle_common_prereq_packages'] | default([]) }}"
+      platform: "{{ __platform_case_merged['__oracle_common_artifact_platform'] | default('') }}"
+      manager: "{{ __platform_case_merged['__oracle_common_package_manager'] | default('') }}"

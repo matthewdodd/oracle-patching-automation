@@ -1,0 +1,36 @@
+---
+# Inputs of standalone_control_role (included by oracle_control_sid.yml). The working directories and the
+# script mode come from oracle_common and initialization_role, which run earlier in the same play.
+argument_specs:
+  main:
+    short_description: Start or stop a standalone database, its listener and PDB listener.
+    description:
+      - startup - rename the alert log, start the database (and open PDBs), check the alert log, start the
+        listener, check the listener logs, start the PDB listener (when sid_server_dict[ORACLE_SID].pdb is set).
+      - shutdown - stop the PDB listener (when pdb is set), the listener and the database.
+      - Script file names (check_alertLog_script, rename_logs_script, start_database_script, ...) are role
+        defaults and can be overridden from the inventory.
+    options:
+      control_command:
+        type: str
+        required: true
+        choices: [startup, shutdown]
+        description: Action to run (set from control by oracle_control_sid.yml).
+      ORACLE_SID:
+        type: str
+        required: true
+        description: ORACLE_SID (lower-cased by oracle_control_sid.yml); key into sid_server_dict.
+      server_name:
+        type: str
+        required: true
+        description: Host the control scripts run on (delegate_to).
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID (dbowner, pdb, dbvip, dbListener, pdbListener).
+      standalone_control_role_time_to_pause:
+        type: raw
+        description: Accepted but unused (as in the original). Alias timeToPause. Default 120.
+      timeToPause:
+        type: raw
+        description: Original name of standalone_control_role_time_to_pause, still accepted.

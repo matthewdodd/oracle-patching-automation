@@ -1,0 +1,83 @@
+---
+# Validates the job inputs (AAP survey / extra vars and the sid_server_dict inventory entry) before anything
+# else runs. Needs no facts, so the playbooks also run it on localhost before the change check and the
+# notifications. Every problem is reported at once. Patterns are anchored with \A ... \Z (vars/main.yml), so a
+# trailing newline is rejected, and any value containing the "<CHANGE_ME>" placeholder is rejected.
+- name: Collect the job input errors
+  ansible.builtin.set_fact:
+    __oracle_common_job_errors: "{{ __oracle_common_job_checks | selectattr('failed') | map(attribute='msg') | list }}"
+  vars:
+    __oracle_common_hosts: "{{ (target | default('') | string).replace(',', '\n').split() }}"
+    __oracle_common_sid_ok: "{{ DATABASE_NAME is defined and (DATABASE_NAME | string) is match(__oracle_common_re_sid) }}"
+    __oracle_common_dict_ok: "{{ sid_server_dict is defined and sid_server_dict is mapping }}"
+    __oracle_common_entry: >-
+      {{ sid_server_dict[DATABASE_NAME]
+         if (__oracle_common_sid_ok and __oracle_common_dict_ok and DATABASE_NAME in sid_server_dict) else {} }}
+    __oracle_common_ticket: "{{ TICKET_NUMBER | default('') | string }}"
+    __oracle_common_job_checks:
+      - failed: "{{ __oracle_common_hosts | length == 0 }}"
+        msg: "target: required, a comma or space separated host list, e.g. -e target=dbhost01.example.com"
+      - failed: "{{ __oracle_common_hosts | reject('match', __oracle_common_re_host) | list | length > 0 }}"
+        msg: >-
+          target: every host must be a host name or IP address; invalid:
+          {{ __oracle_common_hosts | reject('match', __oracle_common_re_host) | list | join(', ') }}
+      - failed: "{{ not __oracle_common_sid_ok }}"
+        msg: >-
+          DATABASE_NAME: must be an ORACLE_SID (a letter, then up to 29 letters, digits or underscores);
+          got '{{ DATABASE_NAME | default('<undefined>') }}'
+      - failed: "{{ ((oracle_common_ticket_required | string | lower) in __oracle_common_true_strings) and (__oracle_common_ticket | length == 0) }}"
+        msg: "TICKET_NUMBER: required (the change ticket number, e.g. CHG0030001)"
+      - failed: >-
+          {{ not ((oracle_common_ticket_number_regex | string).startswith('\A')
+                  and (oracle_common_ticket_number_regex | string).endswith('\Z')) }}
+        msg: "oracle_common_ticket_number_regex: must be anchored with \\A ... \\Z"
+      - failed: >-
+          {{ (__oracle_common_ticket | length > 0)
+             and not (__oracle_common_ticket is match(oracle_common_ticket_number_regex)) }}
+        msg: "TICKET_NUMBER: must match {{ oracle_common_ticket_number_regex }}; got '{{ __oracle_common_ticket }}'"
+      - failed: >-
+          {{ override_chg is defined and not (override_chg is boolean
+             or (override_chg | string | lower) in __oracle_common_bool_strings) }}
+        msg: "override_chg: must be true or false (the strings \"true\" / \"false\" are accepted); got '{{ override_chg | default('') }}'"
+      - failed: "{{ not __oracle_common_dict_ok }}"
+        msg: "sid_server_dict: required, the inventory dictionary of databases keyed by ORACLE_SID"
+      - failed: "{{ __oracle_common_sid_ok and __oracle_common_dict_ok and DATABASE_NAME not in sid_server_dict }}"
+        msg: "sid_server_dict: has no entry for DATABASE_NAME '{{ DATABASE_NAME | default('') }}'"
+      - failed: "{{ __oracle_common_entry is not mapping }}"
+        msg: "sid_server_dict[{{ DATABASE_NAME | default('') }}]: must be a dictionary (dbowner, pdb, dbvip, dbListener, pdbListener)"
+      - failed: >-
+          {{ __oracle_common_entry is mapping and __oracle_common_entry | length > 0
+             and not ((__oracle_common_entry.dbowner | default('') | string) is match(__oracle_common_re_posix_name)) }}
+        msg: >-
+          sid_server_dict[{{ DATABASE_NAME | default('') }}].dbowner: must be a POSIX user name; got
+          '{{ __oracle_common_entry.dbowner | default('<undefined>') if __oracle_common_entry is mapping else '' }}'
+      - failed: >-
+          {{ __oracle_common_entry is mapping
+             and (['pdb', 'dbListener', 'pdbListener']
+                  | select('in', __oracle_common_entry)
+                  | map('extract', __oracle_common_entry) | map('string') | reject('equalto', '')
+                  | reject('match', __oracle_common_re_oracle_name) | list | length > 0) }}
+        msg: >-
+          sid_server_dict[{{ DATABASE_NAME | default('') }}]: pdb, dbListener and pdbListener must be empty or Oracle
+          names (a letter, then letters, digits, _ # . -)
+      - failed: >-
+          {{ __oracle_common_entry is mapping
+             and (__oracle_common_entry.dbvip | default('') | string | length > 0)
+             and not ((__oracle_common_entry.dbvip | string) is match(__oracle_common_re_host)) }}
+        msg: "sid_server_dict[{{ DATABASE_NAME | default('') }}].dbvip: must be empty or a host name or IP address"
+      - failed: >-
+          {{ (([target | default(''), DATABASE_NAME | default(''), TICKET_NUMBER | default(''), override_chg | default('')]
+               | map('string') | select('search', __oracle_common_placeholder | regex_escape) | list | length > 0)
+              or (__oracle_common_placeholder in (sid_server_dict | default({}) | string))) }}
+        msg: >-
+          target, DATABASE_NAME, TICKET_NUMBER, override_chg or sid_server_dict: still contains the placeholder
+          {{ __oracle_common_placeholder }}; replace it with the real value
+
+# tasks/validate.yml imports this file with __oracle_common_job_assert=false and reports these errors together
+# with the configuration errors.
+- name: Validate the job inputs
+  ansible.builtin.assert:
+    that: __oracle_common_job_errors | length == 0
+    fail_msg: "Invalid or missing job inputs: {{ __oracle_common_job_errors | join(' | ') }}"
+    success_msg: "The job inputs are valid"
+  when: __oracle_common_job_assert | default(true) | bool

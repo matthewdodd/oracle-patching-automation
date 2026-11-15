@@ -1,0 +1,148 @@
+---
+# Validates every input before the play changes anything on a host: the job inputs (tasks/validate_job.yml),
+# then the environment configuration. Every problem is reported at once. Patterns are anchored with \A ... \Z
+# (vars/main.yml); paths use the one shared rule (__oracle_common_invalid_path_names); any oracle_common_*
+# value containing the "<CHANGE_ME>" placeholder is rejected. Values that may hold credentials (repository
+# URL, checksum) are never echoed.
+- name: Collect the job input errors
+  ansible.builtin.import_tasks: validate_job.yml
+  vars:
+    __oracle_common_job_assert: false
+
+# Permission modes are normalised to an octal string before they are validated, and the tasks apply the
+# normalised value (oracle_common_modes.<name>), so the checked mode and the applied mode are the same. An
+# unquoted YAML mode is an integer: `script_permission: 0777` parses as 511 and `750` as decimal 750. '%04o'
+# turns 511 back into "0777" (rejected) and 493 (0755) into "0755" (accepted); decimal 750 becomes "1356",
+# which is not a plain 3-digit mode and is rejected with a hint to quote it.
+- name: Reset the normalised permission modes
+  ansible.builtin.set_fact:
+    oracle_common_modes: {}
+
+- name: Normalise the permission modes
+  ansible.builtin.set_fact:
+    oracle_common_modes: >-
+      {{ oracle_common_modes | combine({item.key: (('%04o' | format(item.value)) if item.value is integer
+                                                   else (item.value | string))}) }}
+  loop: "{{ __oracle_common_mode_inputs | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Collect the configuration errors
+  ansible.builtin.set_fact:
+    __oracle_common_config_errors: "{{ __oracle_common_config_checks | selectattr('failed') | map(attribute='msg') | list }}"
+  vars:
+    # The shared path rule (vars/main.yml) is applied to every path input.
+    __oracle_common_paths: >-
+      {{ {'oracle_common_staging_base': oracle_common_staging_base,
+          'oracle_common_remote_script_directory (alias remote_script_directory)': oracle_common_remote_script_directory,
+          'oracle_common_remote_output_directory (alias remote_output_directory)': oracle_common_remote_output_directory,
+          'oracle_common_env_dir': oracle_common_env_dir,
+          'oracle_common_env_file': oracle_common_env_file,
+          'oracle_common_patch_base_dir_oracle': oracle_common_patch_base_dir_oracle,
+          'oracle_common_patch_base_dir_grid': oracle_common_patch_base_dir_grid,
+          'oracle_common_patch_base_dir (alias patch_folder_prefix)': oracle_common_patch_base_dir}
+         | combine({'oracle_common_patch_staging_dir (alias patch_folder_name)': oracle_common_patch_staging_dir}
+                   if (oracle_common_patch_staging_dir | string | length > 0) else {}) }}
+    # Names of the normalised modes that are not a plain octal mode, or that grant group or world write.
+    __oracle_common_bad_modes: >-
+      {{ ((oracle_common_modes | dict2items | rejectattr('value', 'match', __oracle_common_re_octal_mode) | map(attribute='key') | list)
+          + (oracle_common_modes | dict2items | selectattr('value', 'match', __oracle_common_re_mode_world_writable) | map(attribute='key') | list)
+          + (oracle_common_modes | dict2items | selectattr('value', 'match', __oracle_common_re_mode_group_writable) | map(attribute='key') | list))
+         | unique | sort }}
+    __oracle_common_allow_http: "{{ (oracle_common_patch_repo_allow_http | string | lower) in __oracle_common_true_strings }}"
+    __oracle_common_repo_url_re: "{{ __oracle_common_re_http_url if __oracle_common_allow_http else __oracle_common_re_https_url }}"
+    # Every oracle_common_* setting (defaults, inventory, extra vars, and the aliases they read), as text.
+    __oracle_common_placeholder_names: >-
+      {{ query('ansible.builtin.varnames', '^oracle_common_')
+         | zip(query('ansible.builtin.vars', *query('ansible.builtin.varnames', '^oracle_common_')) | map('string'))
+         | selectattr(1, 'search', __oracle_common_placeholder | regex_escape) | map(attribute=0) | sort }}
+    __oracle_common_config_checks:
+      - failed: "{{ __oracle_common_invalid_path_names | length > 0 }}"
+        msg: >-
+          {{ __oracle_common_invalid_path_names | join(', ') }}: must be an absolute path of letters, digits and
+          . _ / - without a '..' component (and not the root directory)
+      - failed: "{{ __oracle_common_bad_modes | length > 0 }}"
+        msg: >-
+          {{ __oracle_common_bad_modes | map('extract', __oracle_common_mode_input_names) | join(', ') }}: must be an
+          octal mode without group or world write access, e.g. "0755" (0777 is not allowed; quote the mode, an
+          unquoted YAML number is read as an integer); got
+          {{ __oracle_common_bad_modes | map('extract', oracle_common_modes) | join(', ') }}
+      - failed: >-
+          {{ not (oracle_common_is_grid_layout is boolean
+                  or (oracle_common_is_grid_layout | string | lower) in __oracle_common_bool_strings) }}
+        msg: >-
+          oracle_common_is_grid_layout (alias is_grid_layout): must be true or false (the strings "true" / "false"
+          are accepted); got '{{ oracle_common_is_grid_layout }}'
+      - failed: >-
+          {{ not ((oracle_common_patch_owner_oracle | string) is match(__oracle_common_re_posix_name)
+                  and (oracle_common_patch_owner_grid | string) is match(__oracle_common_re_posix_name)
+                  and (oracle_common_patch_owner | string) is match(__oracle_common_re_posix_name)) }}
+        msg: >-
+          oracle_common_patch_owner_oracle, oracle_common_patch_owner_grid, oracle_common_patch_owner (alias b_user):
+          must be POSIX user names
+      - failed: >-
+          {{ ((oracle_common_manage_group_membership | string | lower) in __oracle_common_true_strings)
+             and not ((oracle_common_group_name | string) is match(__oracle_common_re_posix_name)) }}
+        msg: >-
+          oracle_common_group_name (alias GROUP_NAME): required while oracle_common_manage_group_membership is true,
+          a POSIX group name (the group the database owner and the patch staging owner join); set
+          oracle_common_manage_group_membership=false to skip group membership; got '{{ oracle_common_group_name }}'
+      - failed: "{{ not ((oracle_common_patch_repo_url | string) is match(__oracle_common_repo_url_re)) }}"
+        msg: >-
+          oracle_common_patch_repo_url (alias artifactory_repo): required, the https URL of the patch repository
+          {{ '(http is allowed by oracle_common_patch_repo_allow_http)' if __oracle_common_allow_http else '' }}
+          (value not shown)
+      - failed: >-
+          {{ not ((oracle_common_patch_checksum | string) is match(__oracle_common_re_checksum))
+             or (oracle_common_patch_checksum | string) is match(__oracle_common_re_checksum_zero) }}
+        msg: >-
+          oracle_common_patch_checksum (alias oracle_patch_checksum): required, <algorithm>:<hex digest> with
+          algorithm md5, sha1, sha224, sha256, sha384 or sha512 and exactly that algorithm's digest length (not all
+          zeros), or <algorithm>:<https URL of a checksum file> (value not shown)
+      - failed: "{{ not ((oracle_common_patch_cycle | string) is match(__oracle_common_re_patch_cycle)) }}"
+        msg: >-
+          oracle_common_patch_cycle (alias oracle_patch_cycle): must be 1-16 letters or digits, e.g. jan; got
+          '{{ oracle_common_patch_cycle }}'
+      - failed: >-
+          {{ (ansible_facts['date_time'] is defined or oracle_patch_year is defined)
+             and not ((oracle_common_patch_year | string) is match(__oracle_common_re_patch_year)) }}
+        msg: >-
+          oracle_common_patch_year (alias oracle_patch_year): must be 2 or 4 digits, e.g. 26; got
+          '{{ oracle_common_patch_year if (ansible_facts['date_time'] is defined or oracle_patch_year is defined) else '' }}'
+      - failed: >-
+          {{ (oracle_common_patch_file_name | string | length > 0)
+             and not ((oracle_common_patch_file_name | string) is match(__oracle_common_re_file_name)) }}
+        msg: >-
+          oracle_common_patch_file_name (aliases oracle_patch_file_name, patch_file_name): must be a plain file name;
+          got '{{ oracle_common_patch_file_name }}'
+      - failed: >-
+          {{ [oracle_common_manage_group_membership, oracle_common_check_packages, oracle_common_patch_repo_version_subdir,
+              oracle_common_patch_repo_version_check, oracle_common_patch_repo_allow_http, oracle_common_ticket_required]
+             | reject('boolean') | map('string') | map('lower') | reject('in', __oracle_common_bool_strings) | list | length > 0 }}
+        msg: >-
+          oracle_common_manage_group_membership, oracle_common_check_packages, oracle_common_patch_repo_version_subdir,
+          oracle_common_patch_repo_version_check, oracle_common_patch_repo_allow_http, oracle_common_ticket_required:
+          must be true or false
+      - failed: "{{ oracle_common_oracle_version_overrides is not mapping }}"
+        msg: "oracle_common_oracle_version_overrides: must be a dictionary keyed by version (e.g. {\"26ai\": {artifact_dir: 26.0.0}})"
+      - failed: "{{ __oracle_common_placeholder_names | length > 0 }}"
+        msg: >-
+          {{ __oracle_common_placeholder_names | join(', ') }}: still the placeholder {{ __oracle_common_placeholder }};
+          replace it with the real value (value not shown)
+  no_log: true
+
+- name: Validate the inputs and the configuration
+  ansible.builtin.assert:
+    that: (__oracle_common_job_errors + __oracle_common_config_errors) | length == 0
+    fail_msg: >-
+      Invalid or missing inputs: {{ (__oracle_common_job_errors + __oracle_common_config_errors) | join(' | ') }}
+    success_msg: "The inputs and the configuration are valid"
+
+- name: Warn about plain http downloads
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: oracle_common_patch_repo_allow_http is true and the patch repository URL uses plain http: the patch
+      bundle can be tampered with in transit; prefer https.
+  when:
+    - (oracle_common_patch_repo_allow_http | string | lower) in __oracle_common_true_strings
+    - (oracle_common_patch_repo_url | string | lower) is match('\Ahttp://')

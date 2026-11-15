@@ -1,7 +1,7 @@
 ---
 - set_fact:
     memberlist="{{ item }}"
-    groupname="{{GROUP_NAME}}"
+    groupname="{{ oracle_common_group_name }}"
     action="add"
 
 - name: Check if OS type is allowed

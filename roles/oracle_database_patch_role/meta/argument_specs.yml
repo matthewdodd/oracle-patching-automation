@@ -1,0 +1,48 @@
+---
+# Inputs of oracle_database_patch_role. initialization_role (run first in the same play) sets the facts
+# listed below; the shared settings are documented in roles/oracle_common/meta/argument_specs.yml.
+argument_specs:
+  main:
+    short_description: Apply the staged patch (OPatch and datapatch) to the database home.
+    description:
+      - Copies the patch scripts and runs database_patch.bash apply as the database owner (asynchronously).
+      - Uses the facts set by initialization_role (remote_script_directory, patch_folder_name) and
+        oracle_common_modes.script.
+    options:
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch.
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID.
+      target:
+        type: str
+        description: Target host list.
+  run_prereq:
+    short_description: Download and stage the patch, then run the prerequisite checks.
+    description:
+      - Downloads the patch bundle (copy_files_to_server.yml), runs the AIX 12.1 qopiprep fix, the patch status
+        check (already applied is reported as unneeded), the OPatch upgrade and conflict check, and utlrp.
+    options:
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch.
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID.
+  copy_files_to_server:
+    short_description: Download the patch bundle into the staging directory and extract it.
+    options:
+      artf_file_name:
+        type: str
+        description: Patch bundle file name (set by run_prereq.yml from patch_file_name).
+      temp_dir:
+        type: str
+        description: Staging directory (set by run_prereq.yml from patch_folder_name).
+  clean_files_from_server:
+    short_description: Remove the staged patch and the copied scripts (used after a run and in failure handling).
+    options: {}

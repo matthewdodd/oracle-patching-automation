@@ -1,0 +1,18 @@
+---
+# Entry point, run once per target play before any other role changes the host:
+#   - name: Load the common configuration and validate the inputs
+#     ansible.builtin.import_role:
+#       name: oracle_common
+# Gathers facts itself when the play did not (after a Python-free OS release check). Each step is a
+# single-purpose task file.
+- name: Refuse unsupported platforms
+  ansible.builtin.import_tasks: guard.yml
+
+- name: Load the OS-specific variables
+  ansible.builtin.import_tasks: os_vars.yml
+
+- name: Load the supported Oracle versions
+  ansible.builtin.import_tasks: oracle_version.yml
+
+- name: Validate the inputs
+  ansible.builtin.import_tasks: validate.yml

@@ -1,0 +1,32 @@
+---
+# Oracle Database 23ai. One entry of the supported-version registry built by tasks/oracle_version.yml, keyed by this file's
+# name (23ai). Adding an Oracle version means adding one such file. Any value can be overridden per environment
+# without editing this file: oracle_common_oracle_version_overrides: {"23ai": {<key>: <value>}}.
+# All values sit under one key so the file is also safe to load with include_vars.
+__oracle_common_version_definition:
+  label: Oracle Database 23ai
+  # UNVERIFIED defaults (no 23ai host was available): confirm them on a real host and override if needed.
+  # Detected version that selects this entry automatically: 23.0.0.0.0 (v$instance.version) or a version_full
+  # of release update 23.4 - 23.25 (e.g. 23.5.0.24.07). Oracle AI Database 26ai is delivered as release update
+  # 23.26 and later of the same code line, so v$instance.version alone (23.0.0.0.0) cannot tell the two apart:
+  # until the detection reports version_full, a 26ai database is detected as 23ai unless oracle_common_db_version
+  # (alias oracle_patch_db_version) is set to 26ai.
+  match_regex: '\A23\.(?:[0-9]|1[0-9]|2[0-5])(?:\.[0-9]+)*\Z'
+  # Detected versions accepted when this entry is selected explicitly (oracle_common_db_version).
+  accept_regex: '\A2[36](?:\.[0-9]+)*\Z'
+  # Folder of this release in the patch repository (same naming scheme as 19.0.0).
+  artifact_dir: "23.0.0"
+  # Version component of the patch staging directory.
+  staging_component: "23ai"
+  # README.html patterns (grep basic regular expressions) that identify the Release Update folder and the OJVM
+  # folder of the patch bundle, and how many README lines must match the OJVM pattern (the original: more than 1).
+  # UNVERIFIED: the 19c README wording is assumed; 23ai bundles may word the README differently or ship no
+  # separate OJVM patch (then the OJVM folder is simply not found, which the patch script accepts).
+  readme_ru_pattern: 'Database * Release Update'
+  readme_jvm_pattern: '\- Oracle JavaVM Component'
+  readme_jvm_min_matches: 2
+  # AIX only: rewrite $ORACLE_HOME/QOpatch/qopiprep.bat to use ksh93 (12.1 only).
+  qopiprep_fix: false
+  # How datapatch runs: upgrade (the original behaviour for every version, kept as the default) or normal.
+  datapatch_startup_mode: upgrade
+  desupported: false

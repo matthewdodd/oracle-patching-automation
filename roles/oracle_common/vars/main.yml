@@ -1,0 +1,105 @@
+---
+# Internal values used by the oracle_common task files. Not inputs: do not override them.
+#
+# Oldest Red Hat family major release (RHEL and its rebuilds, and Amazon Linux: os_family RedHat) that is
+# supported. EL7 and Amazon Linux 2 are refused by tasks/guard.yml: ansible-core 2.22 needs Python 3.9 or later
+# on the targets and those releases have no vendor Python 3.9+.
+__oracle_common_redhat_min_major_version: 8
+
+# Every pattern is anchored with \A ... \Z (never ^ ... $): Python's `$` also matches just before a trailing
+# newline, so "ORCL\n" would pass a `$`-anchored pattern and reach shell commands.
+#
+# ORACLE_SID (DATABASE_NAME): a letter, then letters, digits or underscores (no $ or #, which the shell and
+# the scripts would interpret). Up to 30 characters, Oracle's identifier limit.
+__oracle_common_re_sid: '\A[A-Za-z][A-Za-z0-9_]{0,29}\Z'
+# Portable POSIX user / group name.
+__oracle_common_re_posix_name: '\A[A-Za-z_][A-Za-z0-9_.-]{0,31}\Z'
+# Oracle object names taken from sid_server_dict (listener and PDB names).
+__oracle_common_re_oracle_name: '\A[A-Za-z][A-Za-z0-9_#.-]{0,127}\Z'
+# Host name (RFC 1123 labels; underscores tolerated for inventory aliases), IPv4 address, or IPv6 address.
+__oracle_common_re_host: >-
+  (?x)\A(?:
+  (?=[^\s]{1,253}\Z)[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?(?:\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*
+  | (?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}
+  )\Z
+# Absolute path made only of safe characters (no whitespace, newline or shell metacharacters).
+__oracle_common_re_abs_path: '\A/[A-Za-z0-9._/-]*\Z'
+# A path that is only slashes (the root directory): never a valid staging or patch directory.
+__oracle_common_re_root_only: '\A/+\Z'
+# The one shared '..' rule: a '..' component at the start, between slashes, at the end, or alone. Used with
+# `search` (a match means the path is rejected); names that merely contain dots (app..x, .hidden, 19.0.0) do
+# not match. Paths are also matched against __oracle_common_re_abs_path, which rejects a trailing newline.
+__oracle_common_re_dotdot: '(?:\A|/)\.\.(?:/|\Z)'
+# The shared path rule. A task sets __oracle_common_paths (task vars: {<name shown in the error>: <path>})
+# and reads __oracle_common_invalid_path_names: the names of the paths that are not strings, not absolute
+# paths of safe characters, only the root directory, or that contain a '..' component (leading, middle,
+# trailing or bare). Every path check in the role uses this one rule.
+__oracle_common_invalid_path_names: >-
+  {{ ((__oracle_common_paths | dict2items | rejectattr('value', 'string') | map(attribute='key') | list)
+      + (__oracle_common_paths | dict2items | selectattr('value', 'string')
+         | rejectattr('value', 'match', __oracle_common_re_abs_path) | map(attribute='key') | list)
+      + (__oracle_common_paths | dict2items | selectattr('value', 'string')
+         | selectattr('value', 'match', __oracle_common_re_root_only) | map(attribute='key') | list)
+      + (__oracle_common_paths | dict2items | selectattr('value', 'string')
+         | selectattr('value', 'search', __oracle_common_re_dotdot) | map(attribute='key') | list))
+     | unique | sort }}
+# Plain file name (no directory part).
+__oracle_common_re_file_name: '\A[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,254}\Z'
+# One path component used to build a URL or a directory (repository folder, staging component).
+__oracle_common_re_path_component: '\A[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}\Z'
+# https URL: scheme, optional user-info, host, optional port and path; no whitespace.
+__oracle_common_re_https_url: '\Ahttps://(?:[^\s/@]+@)?[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:[/?#][^\s]*)?\Z'
+# The same, http or https (only accepted where an explicit opt-in toggle allows plain http).
+__oracle_common_re_http_url: '\Ahttps?://(?:[^\s/@]+@)?[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:[/?#][^\s]*)?\Z'
+# File mode in octal (3 digits, optional leading 0). Applied to the normalised string only (tasks/validate.yml
+# turns an integer such as 511, i.e. an unquoted 0777, into "0777" first).
+__oracle_common_re_octal_mode: '\A0?[0-7]{3}\Z'
+# Octal mode with the world (others) write bit, or with the group write bit.
+__oracle_common_re_mode_world_writable: '\A0?[0-7]{2}[2367]\Z'
+__oracle_common_re_mode_group_writable: '\A0?[0-7][2367][0-7]\Z'
+# get_url checksum: <algorithm>:<hex digest of exactly that algorithm's length (either case)>, or
+# <algorithm>:<https URL of a checksum file>. Verbose pattern: the spaces and line breaks are ignored.
+__oracle_common_re_checksum: >-
+  (?x)\A(?:
+  md5:[0-9A-Fa-f]{32} | sha1:[0-9A-Fa-f]{40} | sha224:[0-9A-Fa-f]{56} |
+  sha256:[0-9A-Fa-f]{64} | sha384:[0-9A-Fa-f]{96} | sha512:[0-9A-Fa-f]{128} |
+  (?:md5|sha1|sha224|sha256|sha384|sha512):https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/[^\s]*
+  )\Z
+# A digest made only of zeros (any length): a placeholder such as "sha256:000...0", never a real artifact.
+__oracle_common_re_checksum_zero: '\A(?:md5|sha1|sha224|sha256|sha384|sha512):0+\Z'
+# Patch cycle (e.g. jan, apr, jul, oct, or a site label such as q1) and two- or four-digit year.
+__oracle_common_re_patch_cycle: '\A[A-Za-z0-9]{1,16}\Z'
+__oracle_common_re_patch_year: '\A(?:[0-9]{2}|[0-9]{4})\Z'
+# Database version string as detected on the host (v$instance.version or version_full), e.g. 19.0.0.0.0.
+__oracle_common_re_db_version: '\A[0-9]+(?:\.[0-9]+)+\Z'
+# Boolean-like values accepted for the legacy string inputs (is_grid_layout, override_chg).
+__oracle_common_bool_strings: ["true", "false", "yes", "no", "on", "off", "1", "0", "y", "n"]
+# The true ones. Toggles read before the validation has finished are compared with this list
+# ((value | string | lower) in __oracle_common_true_strings) instead of the bool filter, which rejects invalid
+# strings (deprecated coercion in ansible-core 2.22), so an invalid value is reported by the validation instead.
+__oracle_common_true_strings: ["true", "yes", "on", "1", "y"]
+# The placeholder every example inventory value that must be replaced uses. Any input containing it is rejected.
+__oracle_common_placeholder: "<CHANGE_ME>"
+
+# Keys every vars/oracle_versions/<version>.yml must define (checked by tasks/oracle_version.yml).
+__oracle_common_oracle_version_keys:
+  - label
+  - match_regex
+  - accept_regex
+  - artifact_dir
+  - staging_component
+  - readme_ru_pattern
+  - readme_jvm_pattern
+  - readme_jvm_min_matches
+  - qopiprep_fix
+  - datapatch_startup_mode
+  - desupported
+__oracle_common_datapatch_startup_modes: [upgrade, normal]
+
+# Permission modes that tasks/validate.yml normalises (integer -> '%04o' string) and validates. The tasks apply
+# the normalised value (oracle_common_modes.<name>), so the checked mode and the applied mode are the same.
+__oracle_common_mode_inputs:
+  script: "{{ oracle_common_script_permission }}"
+# Input variable name shown in the error for each mode above (the alias users set most often).
+__oracle_common_mode_input_names:
+  script: oracle_common_script_permission (alias script_permission)

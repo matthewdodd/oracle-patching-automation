@@ -1,0 +1,29 @@
+---
+# Inputs of initialization_role. Formats are checked by oracle_common (tasks/validate.yml), which the
+# playbooks run before this role; the shared settings (working directories, script mode, group, patch
+# repository, checksum, patch naming, staging layout) are documented in roles/oracle_common/meta/argument_specs.yml.
+argument_specs:
+  main:
+    short_description: Prepare a database host for patching and resolve the patch bundle.
+    description:
+      - Checks the prerequisite packages of the OS release (oracle_common packages.yml), removes old working
+        directories, verifies that sid_server_dict[DATABASE_NAME].dbowner owns the running database, adds the
+        database owner and the patch staging owner to oracle_common_group_name (when
+        oracle_common_manage_group_membership is true), stages the patch scripts, detects the database version
+        and resolves the patch bundle (oracle_common oracle_version_select.yml and patch_artifact.yml).
+      - Sets the facts the later roles use - ORACLE_SID, remote_script_directory, remote_output_directory,
+        db_ver_long, db_ver, artf_ver, patch_file_prefix, patch_file_name, patch_folder_prefix, b_user and
+        patch_folder_name.
+      - Requires oracle_common to have run in the same play (import_role oracle_common).
+    options:
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch.
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID (dbowner, pdb, dbvip, dbListener, pdbListener).
+      target:
+        type: str
+        description: Target host list (shown in the database owner check message).

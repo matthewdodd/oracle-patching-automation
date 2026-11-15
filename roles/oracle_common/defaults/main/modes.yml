@@ -1,0 +1,6 @@
+---
+# Mode of the copied scripts and the working directories. The original name script_permission is accepted
+# as an alias. The original 0777 is no longer allowed: any group- or world-writable mode is rejected by
+# tasks/validate.yml (an unquoted YAML mode such as 0777 is read as the integer 511 and is normalised to the
+# octal string "0777" before it is checked, so it is rejected too). Quote modes, e.g. "0755".
+oracle_common_script_permission: "{{ script_permission | default('0755') }}"

@@ -1,0 +1,30 @@
+---
+# One OS release case: run the real roles/oracle_common tasks/guard_os_release.yml (the check made before facts are
+# gathered) with the case's `uname -s` + /etc/os-release (or /etc/redhat-release) text, and compare the outcome.
+- name: Run the OS release check ({{ release_case.name }})
+  block:
+    - name: Reset the outcome of the previous case
+      ansible.builtin.set_fact:
+        release_case_refused: false
+        release_case_message: ""
+
+    - name: Check the OS release
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: guard_os_release
+        oracle_common_os_release_text: "{{ release_case.text }}"
+  rescue:
+    - name: Note the refusal
+      ansible.builtin.set_fact:
+        release_case_refused: true
+        release_case_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Check the outcome ({{ release_case.name }})
+  ansible.builtin.assert:
+    that:
+      - release_case_refused == (release_case.message is defined)
+      - release_case.message | default('') in release_case_message
+    fail_msg: >-
+      case '{{ release_case.name }}': refused {{ release_case_refused }} (expected {{ release_case.message is defined }});
+      message "{{ release_case_message }}" (expected to contain "{{ release_case.message | default('') }}")
+    quiet: true

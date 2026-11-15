@@ -1,0 +1,28 @@
+---
+# Red Hat family release 10 (RHEL 10, Oracle Linux 10 and rebuilds).
+# Conservative list: the core packages Oracle documents for release 9 that are known to ship with release 10.
+# Packages whose availability on release 10 has not been verified (compat-openssl11, libnsl, libxcrypt-compat,
+# libvirt-libs, libasan, liblsan, libibverbs, librdmacm) are left out until the Oracle installation guide for
+# your Oracle release on release 10 confirms them. Override oracle_common_prereq_packages per environment.
+__oracle_common_prereq_packages:
+  - bc
+  - binutils
+  - elfutils-libelf
+  - fontconfig
+  - glibc
+  - glibc-devel
+  - ksh
+  - libaio
+  - libX11
+  - libXau
+  - libXi
+  - libXrender
+  - libXtst
+  - libgcc
+  - libstdc++
+  - libxcb
+  - make
+  - policycoreutils
+  - policycoreutils-python-utils
+  - smartmontools
+  - sysstat
