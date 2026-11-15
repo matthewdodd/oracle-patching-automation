@@ -1,0 +1,53 @@
+---
+# Teams notification (Teams Workflows webhook). notification.yml (playbook directory) includes
+# tasks/notify.yml with the original interface: vars call (the state) and summary_state (patching | prereq).
+# Best effort: a notification that is skipped or cannot be sent is reported as a WARNING and never fails the run.
+#
+# --- Webhook ----------------------------------------------------------------------------------
+# Teams Workflows webhook URL ("When a Teams webhook request is received" -> "Post card in a chat or channel").
+# The URL is a bearer secret: keep it in Ansible Vault as vault_teams_webhook_url (see
+# inventory/example/group_vars/all/vault.yml.example) or in an AAP credential. teams_webhook_url is accepted as an
+# alias. Empty, "<CHANGE_ME>" or not https: the notification is skipped with a message (the URL is never shown).
+oracle_common_notify_webhook_url: "{{ teams_webhook_url | default(vault_teams_webhook_url | default('')) }}"
+# Turn the notifications off entirely (true keeps the original behaviour: a card for every state).
+oracle_common_notify_enabled: true
+
+# --- Transport ----------------------------------------------------------------------------------
+# The TLS certificate of the webhook endpoint is verified. Optional CA bundle (PEM, on the sending host), e.g. a
+# corporate TLS-inspection CA. Empty: the system trust store.
+oracle_common_notify_validate_certs: true
+oracle_common_notify_ca_path: ""
+# Optional HTTPS proxy for the post, e.g. http://proxy.example.com:8080 (no default). Alias: notify_proxy.
+oracle_common_notify_proxy: "{{ notify_proxy | default('') }}"
+# Seconds to wait for the webhook.
+oracle_common_notify_timeout: 30
+# Host that posts the card. Default: the controller / execution environment (localhost), which holds the vault
+# secrets and usually the only route to Teams. Empty: the host running the play posts it (the original behaviour
+# of the target plays, whose card task ran on the database host unless delegated).
+oracle_common_notify_delegate_to: localhost
+
+# --- Job link ----------------------------------------------------------------------------------
+# Base URL of AAP / AWX / Tower (https), e.g. https://aap.example.com. Alias: aap_base_url. Empty: the card shows
+# "n/a" for the URL. The job link is <base URL><job URL path><job id>.
+oracle_common_notify_aap_base_url: "{{ aap_base_url | default('') }}"
+# Path of a job's page: /#/jobs/playbook/ (the original link, AWX and Tower); AAP 2.5 and later use
+# /execution/jobs/playbook/ (the job id is appended; add a trailing /output/ yourself if wanted).
+oracle_common_notify_job_url_path: /#/jobs/playbook/
+
+# --- Card text and colours ------------------------------------------------------------------------
+# One entry per summary_state (the card) and call (the state). Every original state is kept with its text; the
+# Office 365 connector hex colours map to the Adaptive Card colour names (TextBlock colour and container style):
+#   13E81D (green) -> Good, 11A8E8 (blue) -> Accent, f21818 (red) -> Attention.
+# Allowed colours: Default, Dark, Light, Accent, Good, Warning, Attention.
+oracle_common_notify_states:
+  patching:
+    start: {text: started, colour: Good}
+    success: {text: completed, colour: Accent}
+    unneeded: {text: "been skipped; unneeded", colour: Accent}
+    fail: {text: failed, colour: Attention}
+  prereq:
+    start_prereq: {text: started, colour: Good}
+    success_prereq: {text: completed, colour: Accent}
+    failure: {text: failed, colour: Attention}
+# Any other call (as in the original, every unknown state is a failure card in red).
+oracle_common_notify_default_state: {text: failed, colour: Attention}

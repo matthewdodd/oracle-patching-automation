@@ -1,0 +1,105 @@
+---
+# Validates the change-check settings, queries the change record TICKET_NUMBER with
+# servicenow.itsm.change_request_info and checks its state (tasks/change_ticket_state.yml). Every task that
+# touches the credentials runs with no_log; only the ticket number and the record state are printed.
+- name: Validate the ServiceNow change check settings
+  ansible.builtin.set_fact:
+    __oracle_common_chg_errors: "{{ __oracle_common_chg_checks | selectattr('failed') | map(attribute='msg') | list }}"
+    __oracle_common_chg_host: >-
+      {{ __oracle_common_chg_instance if __oracle_common_chg_instance is match(__oracle_common_re_https_url)
+         else 'https://' ~ __oracle_common_chg_instance ~ '.' ~ oracle_common_snow_instance_domain }}
+  vars:
+    __oracle_common_chg_ticket: "{{ TICKET_NUMBER | default('') | string }}"
+    __oracle_common_chg_instance: "{{ oracle_common_snow_instance | default('', true) | string }}"
+    __oracle_common_chg_secrets:
+      oracle_common_snow_instance (vault_snow_instance / snow_instance): "{{ __oracle_common_chg_instance }}"
+      oracle_common_snow_username (vault_snow_user / snow_user): "{{ oracle_common_snow_username | default('', true) | string }}"
+      oracle_common_snow_password (vault_snow_password / snow_password): "{{ oracle_common_snow_password | default('', true) | string }}"
+    __oracle_common_chg_proxy: "{{ oracle_common_snow_proxy | default('', true) | string }}"
+    __oracle_common_chg_checks:
+      - failed: "{{ __oracle_common_chg_ticket | length == 0 }}"
+        msg: "TICKET_NUMBER: required for the ServiceNow change check (or set override_chg to true)"
+      - failed: >-
+          {{ __oracle_common_chg_ticket | length > 0
+             and not (__oracle_common_chg_ticket is match(oracle_common_ticket_number_regex)) }}
+        msg: "TICKET_NUMBER: must match {{ oracle_common_ticket_number_regex }}"
+      - failed: "{{ __oracle_common_chg_secrets | dict2items | selectattr('value', 'equalto', '') | list | length > 0 }}"
+        msg: >-
+          required, from the Ansible Vault:
+          {{ __oracle_common_chg_secrets | dict2items | selectattr('value', 'equalto', '') | map(attribute='key') | join(', ') }}
+      - failed: >-
+          {{ __oracle_common_chg_secrets | dict2items | selectattr('value', 'search', __oracle_common_placeholder | regex_escape)
+             | list | length > 0 }}
+        msg: >-
+          still the placeholder value of vault.yml.example (replace it in the Ansible Vault):
+          {{ __oracle_common_chg_secrets | dict2items | selectattr('value', 'search', __oracle_common_placeholder | regex_escape)
+             | map(attribute='key') | join(', ') }}
+      - failed: >-
+          {{ __oracle_common_chg_instance | length > 0 and not (__oracle_common_chg_instance is search(__oracle_common_placeholder | regex_escape))
+             and not (__oracle_common_chg_instance is match(__oracle_common_re_https_url)
+                      or __oracle_common_chg_instance is match('\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z')) }}
+        msg: "oracle_common_snow_instance: must be an https URL or a bare instance name (value hidden)"
+      - failed: "{{ not (oracle_common_snow_instance_domain | string is match('\\A[A-Za-z0-9.-]{1,253}\\Z')) }}"
+        msg: "oracle_common_snow_instance_domain: must be a DNS domain"
+      - failed: "{{ __oracle_common_chg_proxy | length > 0 and not (__oracle_common_chg_proxy is match(__oracle_common_re_http_url)) }}"
+        msg: "oracle_common_snow_proxy: must be empty or an http(s) proxy URL"
+      - failed: >-
+          {{ not ((oracle_common_snow_allowed_state_min | string) is match('\A-?[0-9]{1,3}\Z')
+                  and (oracle_common_snow_allowed_state_max | string) is match('\A-?[0-9]{1,3}\Z')) }}
+        msg: "oracle_common_snow_allowed_state_min / _max: must be integers (ServiceNow numeric states)"
+      - failed: >-
+          {{ (oracle_common_snow_allowed_state_min | string) is match('\A-?[0-9]{1,3}\Z')
+             and (oracle_common_snow_allowed_state_max | string) is match('\A-?[0-9]{1,3}\Z')
+             and (oracle_common_snow_allowed_state_min | int) > (oracle_common_snow_allowed_state_max | int) }}
+        msg: "oracle_common_snow_allowed_state_min must not be greater than oracle_common_snow_allowed_state_max"
+      - failed: "{{ oracle_common_snow_change_states is not mapping }}"
+        msg: "oracle_common_snow_change_states: must be a dictionary of state name -> ServiceNow numeric state"
+  no_log: true
+
+- name: Check the ServiceNow change check settings
+  ansible.builtin.assert:
+    that: __oracle_common_chg_errors | length == 0
+    fail_msg: "ServiceNow change check: {{ __oracle_common_chg_errors | join(' | ') }}"
+    quiet: true
+
+- name: Show the ServiceNow change ticket number
+  ansible.builtin.debug:
+    msg: "The SNOW Ticket # is: {{ TICKET_NUMBER }}"
+
+- name: Retrieve the change record from ServiceNow
+  servicenow.itsm.change_request_info:
+    instance:
+      host: "{{ __oracle_common_chg_host }}"
+      username: "{{ oracle_common_snow_username }}"
+      password: "{{ oracle_common_snow_password }}"
+      validate_certs: "{{ oracle_common_snow_validate_certs | bool }}"
+      timeout: "{{ oracle_common_snow_timeout | float }}"
+    number: "{{ TICKET_NUMBER }}"
+  environment: >-
+    {{ {'https_proxy': oracle_common_snow_proxy, 'HTTPS_PROXY': oracle_common_snow_proxy}
+       if (oracle_common_snow_proxy | default('') | length > 0) else {} }}
+  register: __oracle_common_chg_result
+  failed_when: false
+  no_log: true
+
+- name: Summarise the ServiceNow answer (credentials removed)
+  ansible.builtin.set_fact:
+    __oracle_common_chg_query_ok: >-
+      {{ not (__oracle_common_chg_result.failed | default(true) | bool) and __oracle_common_chg_result.records is defined }}
+    __oracle_common_chg_query_msg: >-
+      {{ __oracle_common_chg_result.msg | default('no result') | string
+         | replace(oracle_common_snow_password | string if (oracle_common_snow_password | string | length > 0) else '<hidden>', '<hidden>')
+         | replace(oracle_common_snow_username | string if (oracle_common_snow_username | string | length > 0) else '<hidden>', '<hidden>')
+         | truncate(500, true) }}
+  no_log: true
+
+- name: Check that ServiceNow answered
+  ansible.builtin.assert:
+    that: __oracle_common_chg_query_ok | bool
+    fail_msg: >-
+      ServiceNow change check: the query for change record {{ TICKET_NUMBER }} failed: {{ __oracle_common_chg_query_msg }}
+      (check vault_snow_instance / vault_snow_user / vault_snow_password, the proxy and the TLS trust store)
+    quiet: true
+
+- name: Check the change record state
+  ansible.builtin.import_tasks: change_ticket_state.yml

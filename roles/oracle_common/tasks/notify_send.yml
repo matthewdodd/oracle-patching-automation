@@ -1,0 +1,54 @@
+---
+# Posts __oracle_common_notify_body (tasks/notify_payload.yml) to the Teams Workflows webhook. Best effort: any
+# failure (HTTP error, timeout, TLS or proxy error, unreachable sender) is reported as a WARNING and never fails
+# the run. The request carries the webhook URL (a bearer secret), so the post runs with no_log and the warning
+# shows only the HTTP status and the error text with the URL removed.
+- name: Post the notification card
+  block:
+    - name: Post the notification card to the Teams webhook
+      ansible.builtin.uri:
+        url: "{{ oracle_common_notify_webhook_url }}"
+        method: POST
+        body_format: json
+        body: "{{ __oracle_common_notify_body }}"
+        status_code: [200, 201, 202, 204]
+        timeout: "{{ oracle_common_notify_timeout | int }}"
+        validate_certs: "{{ oracle_common_notify_validate_certs | bool }}"
+        ca_path: "{{ oracle_common_notify_ca_path if (oracle_common_notify_ca_path | default('') | length > 0) else omit }}"
+      environment: >-
+        {{ {'https_proxy': oracle_common_notify_proxy, 'HTTPS_PROXY': oracle_common_notify_proxy}
+           if (oracle_common_notify_proxy | default('') | length > 0) else {} }}
+      delegate_to: >-
+        {{ oracle_common_notify_delegate_to if (oracle_common_notify_delegate_to | default('') | length > 0)
+           else inventory_hostname }}
+      become: false
+      ignore_unreachable: true
+      no_log: true
+      register: __oracle_common_notify_result
+      failed_when: false
+      changed_when: false
+
+    - name: Summarise the webhook answer (URL removed)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_sent: "{{ (__oracle_common_notify_result.status | default(-1) | int) in [200, 201, 202, 204] }}"
+        __oracle_common_notify_status: "{{ __oracle_common_notify_result.status | default('n/a') | string }}"
+        __oracle_common_notify_error: >-
+          {{ __oracle_common_notify_result.msg | default('unknown error') | string
+             | replace(oracle_common_notify_webhook_url | string, '<webhook URL>') | truncate(500, true) }}
+      no_log: true
+
+    - name: Report the failed notification (non-fatal)
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Teams notification '{{ call | default('') }}' was not sent
+          (HTTP {{ __oracle_common_notify_status }}): {{ __oracle_common_notify_error }}
+      when: not (__oracle_common_notify_sent | bool)
+
+    - name: Report the sent notification
+      ansible.builtin.debug:
+        msg: "Teams notification '{{ call | default('') }}' sent (HTTP {{ __oracle_common_notify_status }})"
+      when: __oracle_common_notify_sent | bool
+  rescue:
+    - name: Report the failed notification (non-fatal)
+      ansible.builtin.debug:
+        msg: "WARNING: Teams notification '{{ call | default('') }}' was not sent (details hidden: the request carries a secret)"

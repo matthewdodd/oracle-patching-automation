@@ -1,0 +1,310 @@
+---
+# ServiceNow change check regression test (roles/oracle_common tasks/change_ticket.yml and change_ticket_check.yml).
+# Runs on the controller only; no ServiceNow is contacted except a connection-refused address (127.0.0.1:9) and a
+# reserved .invalid name. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/change_ticket_override.yml
+#
+# 1. override_chg truthiness: true, "true", "True", "yes" skip the check; false, "false", "no" and an undefined
+#    override_chg run it (proved by the check reaching the settings validation); a non-boolean string is rejected.
+# 2. Settings: missing credentials and "<CHANGE_ME>" placeholders fail with a clear message naming the vault
+#    variables, without echoing a secret; TICKET_NUMBER is required and validated when the check runs.
+# 3. The legacy names snow_instance / snow_user / snow_password are accepted (a bare instance name becomes an https
+#    URL); a failed query gives a clear message without the password.
+# Every case resets its outcome to a sentinel first, so a case cannot pass on the result of the previous one.
+- name: ServiceNow change check regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    test_tasks_from: change_ticket
+    test_ticket: CHG0030001
+    test_password: S3cr3t-Pa55w0rd-Example
+  tasks:
+    # --- 1. override_chg -----------------------------------------------------------------------------------
+    - name: Case override_chg true (boolean) skips the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: true}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg true (boolean)
+      ansible.builtin.assert:
+        that: [test_outcome == 'passed', __oracle_common_chg_skip | string == 'True']
+        fail_msg: "override_chg true did not skip the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg "true" (legacy string) skips the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "true"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg "true"
+      ansible.builtin.assert:
+        that: [test_outcome == 'passed', __oracle_common_chg_skip | string == 'True']
+        fail_msg: "override_chg \"true\" did not skip the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg "True" and "yes" skip the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check with "True"
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "True"}  # noqa: var-naming[pattern] - original input name
+        - name: Check "True"
+          ansible.builtin.assert: {that: __oracle_common_chg_skip | string == 'True', quiet: true}
+        - name: Reset the skip flag
+          ansible.builtin.set_fact: {__oracle_common_chg_skip: __not_run__}
+        - name: Run the change check with "yes"
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "yes"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg "True" / "yes"
+      ansible.builtin.assert:
+        that: [test_outcome == 'passed', __oracle_common_chg_skip | string == 'True']
+        fail_msg: "override_chg \"True\" / \"yes\" did not skip the check: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case override_chg false (boolean) runs the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: false}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg false
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_skip | string == 'False'
+          - "'required, from the Ansible Vault' in test_outcome"
+          - "'vault_snow_instance' in test_outcome and 'vault_snow_user' in test_outcome and 'vault_snow_password' in test_outcome"
+        fail_msg: "override_chg false did not run the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg "false" (legacy string) runs the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "false"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg "false"
+      ansible.builtin.assert:
+        that: [__oracle_common_chg_skip | string == 'False', "'required, from the Ansible Vault' in test_outcome"]
+        fail_msg: "override_chg \"false\" did not run the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg "no" runs the check
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "no"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg "no"
+      ansible.builtin.assert:
+        that: [__oracle_common_chg_skip | string == 'False', "'required, from the Ansible Vault' in test_outcome"]
+        fail_msg: "override_chg \"no\" did not run the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg undefined runs the check (default false)
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_skip: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg undefined
+      ansible.builtin.assert:
+        that: [__oracle_common_chg_skip | string == 'False', "'required, from the Ansible Vault' in test_outcome"]
+        fail_msg: "an undefined override_chg did not run the check: {{ test_outcome }} / {{ __oracle_common_chg_skip }}"
+        quiet: true
+
+    - name: Case override_chg not a boolean is rejected
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars: {TICKET_NUMBER: "{{ test_ticket }}", override_chg: "maybe"}  # noqa: var-naming[pattern] - original input name
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check override_chg not a boolean
+      ansible.builtin.assert:
+        that: "'override_chg: must be true or false' in test_outcome"
+        fail_msg: "override_chg 'maybe' was not rejected: {{ test_outcome }}"
+        quiet: true
+
+    # --- 2. Settings ----------------------------------------------------------------------------------------
+    - name: Case placeholder credentials are rejected without echoing a secret
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            TICKET_NUMBER: "{{ test_ticket }}"  # noqa: var-naming[pattern] - original input name
+            vault_snow_instance: "<CHANGE_ME>"
+            vault_snow_user: "<CHANGE_ME>"
+            vault_snow_password: "{{ test_password }}"
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check placeholder credentials
+      ansible.builtin.assert:
+        that:
+          - "'still the placeholder value of vault.yml.example' in test_outcome"
+          - "'vault_snow_instance' in test_outcome and 'vault_snow_user' in test_outcome"
+          - "'vault_snow_password' not in test_outcome"
+          - test_password not in test_outcome
+        fail_msg: "placeholder credentials were not rejected cleanly: {{ test_outcome | replace(test_password, '<pw>') }}"
+        quiet: true
+
+    - name: Case TICKET_NUMBER missing or malformed while the check runs
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            TICKET_NUMBER: "CHG 1; id"  # noqa: var-naming[pattern] - original input name
+            override_chg: false
+            vault_snow_instance: https://127.0.0.1:9
+            vault_snow_user: example-user
+            vault_snow_password: "{{ test_password }}"
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check TICKET_NUMBER malformed
+      ansible.builtin.assert:
+        that: ["'TICKET_NUMBER: must match' in test_outcome", "'required, from the Ansible Vault' not in test_outcome"]
+        fail_msg: "a malformed TICKET_NUMBER was not rejected: {{ test_outcome | replace(test_password, '<pw>') }}"
+        quiet: true
+
+    - name: Case allowed state range inverted
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            TICKET_NUMBER: "{{ test_ticket }}"  # noqa: var-naming[pattern] - original input name
+            vault_snow_instance: https://127.0.0.1:9
+            vault_snow_user: example-user
+            vault_snow_password: "{{ test_password }}"
+            oracle_common_snow_allowed_state_min: 0
+            oracle_common_snow_allowed_state_max: -2
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check the inverted state range
+      ansible.builtin.assert:
+        that: "'must not be greater than' in test_outcome"
+        fail_msg: "an inverted state range was not rejected: {{ test_outcome | replace(test_password, '<pw>') }}"
+        quiet: true
+
+    # --- 3. Legacy names and a failed query -------------------------------------------------------------------
+    - name: Case legacy snow_* names with a bare instance name; the query fails cleanly
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_host: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            TICKET_NUMBER: "{{ test_ticket }}"  # noqa: var-naming[pattern] - original input name
+            override_chg: "false"
+            snow_instance: dev12345
+            snow_user: example-user
+            snow_password: "{{ test_password }}"
+            # Reserved top-level domain: never resolves, so nothing is contacted.
+            oracle_common_snow_instance_domain: invalid
+            oracle_common_snow_timeout: 5
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check the legacy names and the failed query
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_host == 'https://dev12345.invalid'
+          - "'the query for change record CHG0030001 failed' in test_outcome"
+          - test_password not in test_outcome
+        fail_msg: >-
+          legacy names not accepted or the failed query not reported cleanly: host {{ __oracle_common_chg_host }};
+          {{ test_outcome | replace(test_password, '<pw>') }}
+        quiet: true
+
+    - name: Case vault_snow_* names with an https instance URL; the query fails cleanly
+      block:
+        - name: Reset the outcome
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_host: __not_run__}
+        - name: Run the change check
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            TICKET_NUMBER: "{{ test_ticket }}"  # noqa: var-naming[pattern] - original input name
+            vault_snow_instance: https://127.0.0.1:9
+            vault_snow_user: example-user
+            vault_snow_password: "{{ test_password }}"
+            oracle_common_snow_timeout: 5
+        - name: Record the outcome
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check the vault names and the failed query
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_host == 'https://127.0.0.1:9'
+          - "'the query for change record CHG0030001 failed' in test_outcome"
+          - test_password not in test_outcome
+        fail_msg: >-
+          vault names not used or the failed query not reported cleanly: host {{ __oracle_common_chg_host }};
+          {{ test_outcome | replace(test_password, '<pw>') }}
+        quiet: true

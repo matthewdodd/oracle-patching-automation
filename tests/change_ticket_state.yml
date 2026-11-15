@@ -1,0 +1,357 @@
+---
+# Change record state regression test (roles/oracle_common tasks/change_ticket_state.yml). Feeds results shaped like
+# servicenow.itsm.change_request_info's (records with state names, or numeric states) to the real task file; no
+# network. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/change_ticket_state.yml
+#
+# Default allowed range -2 .. -1 (Scheduled .. Implement, the original check): scheduled, implement and the numeric
+# "-2" / "-1" pass; new, authorize, review, closed, "0", an unknown name and an empty state fail with "is not in the
+# required state"; no record and two records fail with a clear message; a custom range and a custom state name
+# are honoured. Each case is one block (reset the outcome to a sentinel, run the real task file, record the
+# outcome) followed by its check, so a case can never pass on the result of the previous one.
+- name: Change record state regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    test_tasks_from: change_ticket_state
+    TICKET_NUMBER: CHG0030001  # noqa: var-naming[pattern] - original input name
+  tasks:
+    - name: Case scheduled passes
+      block:
+        - name: Reset the outcome (scheduled passes)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (scheduled passes)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "scheduled"}]}
+        - name: Record the outcome (scheduled passes)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (scheduled passes)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case scheduled passes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'scheduled passes': expected 'passed', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case implement passes
+      block:
+        - name: Reset the outcome (implement passes)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (implement passes)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "implement"}]}
+        - name: Record the outcome (implement passes)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (implement passes)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case implement passes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'implement passes': expected 'passed', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case numeric -2 passes
+      block:
+        - name: Reset the outcome (numeric -2 passes)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (numeric -2 passes)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "-2"}]}
+        - name: Record the outcome (numeric -2 passes)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (numeric -2 passes)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case numeric -2 passes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'numeric -2 passes': expected 'passed', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case numeric -1 passes
+      block:
+        - name: Reset the outcome (numeric -1 passes)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (numeric -1 passes)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "-1"}]}
+        - name: Record the outcome (numeric -1 passes)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (numeric -1 passes)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case numeric -1 passes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'numeric -1 passes': expected 'passed', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case new fails
+      block:
+        - name: Reset the outcome (new fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (new fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "new"}]}
+        - name: Record the outcome (new fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (new fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case new fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'new fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case authorize fails
+      block:
+        - name: Reset the outcome (authorize fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (authorize fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "authorize"}]}
+        - name: Record the outcome (authorize fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (authorize fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case authorize fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'authorize fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case review fails
+      block:
+        - name: Reset the outcome (review fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (review fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "review"}]}
+        - name: Record the outcome (review fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (review fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case review fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'review fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case closed fails
+      block:
+        - name: Reset the outcome (closed fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (closed fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "closed"}]}
+        - name: Record the outcome (closed fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (closed fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case closed fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'closed fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case numeric 0 fails
+      block:
+        - name: Reset the outcome (numeric 0 fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (numeric 0 fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "0"}]}
+        - name: Record the outcome (numeric 0 fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (numeric 0 fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case numeric 0 fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'numeric 0 fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case unknown state name fails
+      block:
+        - name: Reset the outcome (unknown state name fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (unknown state name fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "on_hold_custom"}]}
+        - name: Record the outcome (unknown state name fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (unknown state name fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case unknown state name fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'unknown state name fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case empty state fails
+      block:
+        - name: Reset the outcome (empty state fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (empty state fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": ""}]}
+        - name: Record the outcome (empty state fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (empty state fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case empty state fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'empty state fails': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case no record fails
+      block:
+        - name: Reset the outcome (no record fails)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (no record fails)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: []}
+        - name: Record the outcome (no record fails)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (no record fails)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case no record fails
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'was not found in ServiceNow' in test_outcome"
+        fail_msg: "case 'no record fails': expected 'was not found in ServiceNow', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case two records fail
+      block:
+        - name: Reset the outcome (two records fail)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (two records fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "scheduled"}, {"number": "CHG0030001", "state": "scheduled"}]}
+        - name: Record the outcome (two records fail)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (two records fail)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case two records fail
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'matched 2 records' in test_outcome"
+        fail_msg: "case 'two records fail': expected 'matched 2 records', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case custom range accepts authorize
+      block:
+        - name: Reset the outcome (custom range accepts authorize)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (custom range accepts authorize)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "authorize"}]}
+            oracle_common_snow_allowed_state_min: -3
+        - name: Record the outcome (custom range accepts authorize)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (custom range accepts authorize)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case custom range accepts authorize
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'custom range accepts authorize': expected 'passed', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case custom range rejects implement
+      block:
+        - name: Reset the outcome (custom range rejects implement)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (custom range rejects implement)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "implement"}]}
+            oracle_common_snow_allowed_state_max: -2
+        - name: Record the outcome (custom range rejects implement)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (custom range rejects implement)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case custom range rejects implement
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "'is not in the required state' in test_outcome"
+        fail_msg: "case 'custom range rejects implement': expected 'is not in the required state', got: {{ test_outcome }}"
+        quiet: true
+
+    - name: Case custom state name passes
+      block:
+        - name: Reset the outcome (custom state name passes)
+          ansible.builtin.set_fact: {test_outcome: __not_run__, __oracle_common_chg_state: __not_run__}
+        - name: Check the change record state (custom state name passes)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            __oracle_common_chg_result: {records: [{"number": "CHG0030001", "state": "ready_to_implement"}]}
+            oracle_common_snow_change_states: {scheduled: -2, implement: -1, ready_to_implement: -1}
+        - name: Record the outcome (custom state name passes)
+          ansible.builtin.set_fact: {test_outcome: passed}
+      rescue:
+        - name: Record the failure (custom state name passes)
+          ansible.builtin.set_fact: {test_outcome: "{{ ansible_failed_result.msg | default('failed') }}"}
+    - name: Check case custom state name passes
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_chg_state != '__not_run__'
+          - "test_outcome == 'passed'"
+        fail_msg: "case 'custom state name passes': expected 'passed', got: {{ test_outcome }}"
+        quiet: true

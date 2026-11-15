@@ -1,0 +1,401 @@
+---
+# Teams notification card regression test (roles/oracle_common tasks/notify_payload.yml). Renders the Adaptive Card
+# for every original state without any network and asserts on the body. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/notify_payload.yml
+#
+# 1. Every state of both cards keeps its original text, with the original colours mapped to Adaptive Card colours
+#    (13E81D -> Good, 11A8E8 -> Accent, f21818 -> Attention): patching start / success / unneeded / fail (and any
+#    other call as a failure card), prereq start_prereq / success_prereq / failure. The six original facts are
+#    present (Database, Host, Change Ticket, URL, Running User, Scheduled Job Name) with the CLI defaults.
+# 2. AAP / AWX job variables: awx_* names, the tower_* aliases, awx_* winning over tower_*, the job link built from
+#    oracle_common_notify_aap_base_url (and its alias aap_base_url) and the configurable job URL path, and "n/a"
+#    for an http base URL or a non-numeric job id; a custom state text and colour.
+# 3. An unknown summary_state sets a skip reason (the original sent no card).
+# Each case resets the card to a sentinel first, so a case can never pass on the card of the previous one.
+- name: Teams notification card regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    test_tasks_from: notify_payload
+    DATABASE_NAME: ORCL01  # noqa: var-naming[pattern] - original input name
+    TICKET_NUMBER: CHG0030001  # noqa: var-naming[pattern] - original input name
+    target: dbhost01.example.com,dbhost02.example.com
+    test_card: "{{ __oracle_common_notify_body.attachments[0].content }}"
+    test_facts: "{{ test_card.body[2].facts | items2dict(key_name='title', value_name='value') }}"
+  tasks:
+    - name: Reset the card (patching start)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (patching start)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+    - name: Check the card (patching start)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database patching has started\""
+          - "test_card.body[1].color == 'Good'"
+          - "test_card.body[0].style == 'good'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' is being patched\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'patching start': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (patching success)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (patching success)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "success"
+        summary_state: "patching"
+    - name: Check the card (patching success)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database patching has completed\""
+          - "test_card.body[1].color == 'Accent'"
+          - "test_card.body[0].style == 'accent'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' is being patched\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'patching success': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (patching unneeded)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (patching unneeded)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "unneeded"
+        summary_state: "patching"
+    - name: Check the card (patching unneeded)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database patching has been skipped; unneeded\""
+          - "test_card.body[1].color == 'Accent'"
+          - "test_card.body[0].style == 'accent'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' is being patched\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'patching unneeded': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (patching fail)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (patching fail)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "fail"
+        summary_state: "patching"
+    - name: Check the card (patching fail)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database patching has failed\""
+          - "test_card.body[1].color == 'Attention'"
+          - "test_card.body[0].style == 'attention'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' is being patched\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'patching fail': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (patching unknown call)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (patching unknown call)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "bogus"
+        summary_state: "patching"
+    - name: Check the card (patching unknown call)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database patching has failed\""
+          - "test_card.body[1].color == 'Attention'"
+          - "test_card.body[0].style == 'attention'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' is being patched\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'patching unknown call': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (prereq start_prereq)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (prereq start_prereq)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start_prereq"
+        summary_state: "prereq"
+    - name: Check the card (prereq start_prereq)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database prerequisite check has started\""
+          - "test_card.body[1].color == 'Good'"
+          - "test_card.body[0].style == 'good'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' prerequisite check\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'prereq start_prereq': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (prereq success_prereq)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (prereq success_prereq)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "success_prereq"
+        summary_state: "prereq"
+    - name: Check the card (prereq success_prereq)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database prerequisite check has completed\""
+          - "test_card.body[1].color == 'Accent'"
+          - "test_card.body[0].style == 'accent'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' prerequisite check\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'prereq success_prereq': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (prereq failure)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (prereq failure)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "failure"
+        summary_state: "prereq"
+    - name: Check the card (prereq failure)
+      ansible.builtin.assert:
+        that:
+          - "__oracle_common_notify_skip_reason == ''"
+          - "__oracle_common_notify_body.type == 'message'"
+          - "__oracle_common_notify_body.attachments[0].contentType == 'application/vnd.microsoft.card.adaptive'"
+          - "test_card.type == 'AdaptiveCard'"
+          - "test_card.body[1].text == \"Database prerequisite check has failed\""
+          - "test_card.body[1].color == 'Attention'"
+          - "test_card.body[0].style == 'attention'"
+          - "test_card.body[0]['items'][1].text == \"'ORCL01' prerequisite check\""
+          - "test_card.body[0]['items'][0].text == \"Job #n/a 'manual run'\""
+          - "test_card.body[2].facts | map(attribute='title') | list == ['Database', 'Host', 'Change Ticket', 'URL', 'Running User', 'Scheduled Job Name']"
+          - "test_facts['Database'] == 'ORCL01' and test_facts['Host'] == 'dbhost01.example.com,dbhost02.example.com'"
+          - "test_facts['Change Ticket'] == 'CHG0030001' and test_facts['URL'] == 'n/a'"
+          - "test_facts['Running User'] == 'scheduler' and test_facts['Scheduled Job Name'] == 'manual job'"
+          - "test_card.actions == []"
+        fail_msg: "case 'prereq failure': got title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (awx job variables)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (awx job variables)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "success"
+        summary_state: "patching"
+        awx_job_id: "1234"
+        awx_job_template_name: "Patch Oracle"
+        awx_user_name: "dba1"
+        awx_schedule_name: "Monthly patch"
+        oracle_common_notify_aap_base_url: "https://aap.example.com/"
+    - name: Check the card (awx job variables)
+      ansible.builtin.assert:
+        that:
+          - "test_card.body[0]['items'][0].text == \"Job #1234 'Patch Oracle'\""
+          - "test_facts['URL'] == 'https://aap.example.com/#/jobs/playbook/1234'"
+          - "test_facts['Running User'] == 'dba1' and test_facts['Scheduled Job Name'] == 'Monthly patch'"
+          - "test_card.actions | length == 1 and test_card.actions[0].type == 'Action.OpenUrl'"
+          - "test_card.actions[0].url == 'https://aap.example.com/#/jobs/playbook/1234'"
+        fail_msg: "case 'awx job variables': awx_* variables not used: {{ test_facts | default({}) }}"
+        quiet: true
+
+    - name: Reset the card (tower aliases and aap_base_url)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (tower aliases and aap_base_url)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+        tower_job_id: "77"
+        tower_job_template_name: "Legacy template"
+        tower_user_name: "towerusr"
+        tower_schedule_name: "Tower schedule"
+        aap_base_url: "https://tower.example.com"
+        oracle_common_notify_job_url_path: "/execution/jobs/playbook/"
+    - name: Check the card (tower aliases and aap_base_url)
+      ansible.builtin.assert:
+        that:
+          - "test_card.body[0]['items'][0].text == \"Job #77 'Legacy template'\""
+          - "test_facts['URL'] == 'https://tower.example.com/execution/jobs/playbook/77'"
+          - "test_facts['Running User'] == 'towerusr' and test_facts['Scheduled Job Name'] == 'Tower schedule'"
+        fail_msg: "case 'tower aliases and aap_base_url': tower_* aliases not used: {{ test_facts | default({}) }}"
+        quiet: true
+
+    - name: Reset the card (awx wins over tower)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (awx wins over tower)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+        awx_job_id: "5"
+        tower_job_id: "6"
+        awx_user_name: "new"
+        tower_user_name: "old"
+        oracle_common_notify_aap_base_url: "https://aap.example.com"
+    - name: Check the card (awx wins over tower)
+      ansible.builtin.assert:
+        that:
+          - "test_card.body[0]['items'][0].text == \"Job #5 'manual run'\""
+          - "test_facts['URL'] == 'https://aap.example.com/#/jobs/playbook/5' and test_facts['Running User'] == 'new'"
+        fail_msg: "case 'awx wins over tower': awx_* did not win: {{ test_facts | default({}) }}"
+        quiet: true
+
+    - name: Reset the card (http base URL gives no link)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (http base URL gives no link)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+        awx_job_id: "5"
+        oracle_common_notify_aap_base_url: "http://aap.example.com"
+    - name: Check the card (http base URL gives no link)
+      ansible.builtin.assert:
+        that:
+          - "test_facts['URL'] == 'n/a'"
+          - "test_card.actions == []"
+        fail_msg: "case 'http base URL gives no link': an http base URL produced a link: {{ test_facts | default({}) }}"
+        quiet: true
+
+    - name: Reset the card (non-numeric job id gives no link)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (non-numeric job id gives no link)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+        awx_job_id: "1; rm -rf /"
+        oracle_common_notify_aap_base_url: "https://aap.example.com"
+    - name: Check the card (non-numeric job id gives no link)
+      ansible.builtin.assert:
+        that:
+          - "test_facts['URL'] == 'n/a'"
+          - "test_card.actions == []"
+        fail_msg: "case 'non-numeric job id gives no link': a non-numeric job id produced a link: {{ test_facts | default({}) }}"
+        quiet: true
+
+    - name: Reset the card (custom state)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (custom state)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "patching"
+        oracle_common_notify_states: {patching: {start: {text: begun, colour: Warning}}}
+    - name: Check the card (custom state)
+      ansible.builtin.assert:
+        that:
+          - "test_card.body[1].text == 'Database patching has begun'"
+          - "test_card.body[1].color == 'Warning'"
+          - "test_card.body[0].style == 'warning'"
+        fail_msg: "case 'custom state': not honoured: title '{{ test_card.body[1].text | default('') }}', colour '{{ test_card.body[1].color | default('') }}'"
+        quiet: true
+
+    - name: Reset the card (unknown summary_state)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_body: __not_run__
+        __oracle_common_notify_skip_reason: __not_run__
+    - name: Render the card (unknown summary_state)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        call: "start"
+        summary_state: "other"
+    - name: Check the card (unknown summary_state)
+      ansible.builtin.assert:
+        that:
+          - "\"summary_state 'other' is not one of patching, prereq\" in __oracle_common_notify_skip_reason"
+        fail_msg: "case 'unknown summary_state': no skip reason for an unknown summary_state: {{ __oracle_common_notify_skip_reason }}"
+        quiet: true

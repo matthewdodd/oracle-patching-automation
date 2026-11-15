@@ -218,3 +218,222 @@ argument_specs:
   packages:
     short_description: Check the prerequisite packages (AIX - filesets) of the OS release.
     options: {}
+
+  notify:
+    short_description: Send the Teams notification card (Teams Workflows webhook, Adaptive Card). Best effort.
+    description:
+      - Entry point of notification.yml. Builds the card (tasks/notify_payload.yml) and posts it with ansible.builtin.uri
+        (tasks/notify_send.yml, no_log). A notification that is skipped or cannot be sent is reported as a WARNING and
+        never fails the run.
+      - Skipped with a message when oracle_common_notify_enabled is false, the webhook URL is empty, still "<CHANGE_ME>"
+        or not https, or summary_state is not a card of oracle_common_notify_states.
+      - Card facts - Database (DATABASE_NAME), Host (target), Change Ticket (TICKET_NUMBER), URL (job link), Running User,
+        Scheduled Job Name. AAP / AWX job variables are read as awx_* first, then the original tower_* names
+        (tower_user_name, tower_schedule_name, tower_job_id, tower_job_template_name), then CLI defaults
+        (scheduler, manual job, n/a, manual run).
+    options:
+      call:
+        type: str
+        required: true
+        description:
+          - The job state - start, success, unneeded, fail (summary_state patching); start_prereq, success_prereq,
+            failure (summary_state prereq). Any other value sends a failure card (oracle_common_notify_default_state).
+      summary_state:
+        type: str
+        required: true
+        description: The card - patching or prereq (keys of oracle_common_notify_states).
+      oracle_common_notify_webhook_url:
+        type: str
+        no_log: true
+        description:
+          - Teams Workflows webhook URL (https). A secret - default vault_teams_webhook_url (Ansible Vault); alias
+            teams_webhook_url. Empty or "<CHANGE_ME>" - the notification is skipped.
+      vault_teams_webhook_url:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the Teams Workflows webhook URL (see inventory/example/group_vars/all/vault.yml.example).
+      teams_webhook_url:
+        type: str
+        no_log: true
+        description: Alias of oracle_common_notify_webhook_url.
+      oracle_common_notify_enabled:
+        type: raw
+        description: Send notifications (default true). Boolean; the strings "true" / "false" are accepted.
+      oracle_common_notify_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the webhook endpoint.
+      oracle_common_notify_ca_path:
+        type: str
+        default: ""
+        description: Optional CA bundle (PEM) on the sending host used to verify the webhook endpoint.
+      oracle_common_notify_proxy:
+        type: str
+        description: Optional HTTPS proxy for the post (no default). Alias notify_proxy.
+      notify_proxy:
+        type: str
+        description: Alias of oracle_common_notify_proxy.
+      oracle_common_notify_timeout:
+        type: int
+        default: 30
+        description: Seconds to wait for the webhook.
+      oracle_common_notify_delegate_to:
+        type: str
+        default: localhost
+        description: Host that posts the card. Empty - the host running the play (the original behaviour of the target plays).
+      oracle_common_notify_aap_base_url:
+        type: str
+        description: https base URL of AAP / AWX / Tower for the job link. Alias aap_base_url. Empty - the URL fact is "n/a".
+      aap_base_url:
+        type: str
+        description: Alias of oracle_common_notify_aap_base_url.
+      oracle_common_notify_job_url_path:
+        type: str
+        default: /#/jobs/playbook/
+        description: Path of a job page, appended to the base URL before the job id (AAP 2.5+ - /execution/jobs/playbook/).
+      oracle_common_notify_states:
+        type: dict
+        description:
+          - Card text and Adaptive Card colour per summary_state and call, e.g. patching.start = {text started, colour Good}.
+            The defaults keep every original state and text; 13E81D -> Good, 11A8E8 -> Accent, f21818 -> Attention.
+      oracle_common_notify_default_state:
+        type: dict
+        description: Text and colour for any other call (default failed / Attention).
+      awx_user_name:
+        type: str
+        description: AAP / AWX job variable - the launching user (Running User). Falls back to tower_user_name, then scheduler.
+      tower_user_name:
+        type: str
+        description: Original name of awx_user_name, still accepted.
+      awx_schedule_name:
+        type: str
+        description: AAP / AWX job variable - the schedule (Scheduled Job Name). Falls back to tower_schedule_name, then manual job.
+      tower_schedule_name:
+        type: str
+        description: Original name of awx_schedule_name, still accepted.
+      awx_job_id:
+        type: raw
+        description: AAP / AWX job variable - the job id (card title and job link). Falls back to tower_job_id, then n/a.
+      tower_job_id:
+        type: raw
+        description: Original name of awx_job_id, still accepted.
+      awx_job_template_name:
+        type: str
+        description: AAP / AWX job variable - the job template (card title). Falls back to tower_job_template_name, then manual run.
+      tower_job_template_name:
+        type: str
+        description: Original name of awx_job_template_name, still accepted.
+
+  notify_payload:
+    short_description: Build the Teams Adaptive Card for call / summary_state into __oracle_common_notify_body (no network).
+    options:
+      call:
+        type: str
+        required: true
+        description: The job state (see the notify entry point).
+      summary_state:
+        type: str
+        required: true
+        description: The card - patching or prereq.
+
+  notify_send:
+    short_description: Post __oracle_common_notify_body to the Teams webhook (no_log, best effort). Used by notify.
+    options: {}
+
+  change_ticket:
+    short_description: ServiceNow change check (servicenow.itsm.change_request_info), skipped when override_chg is true.
+    description:
+      - Entry point of oracle_chg_ticket.yml. The change record TICKET_NUMBER must exist and its state must be within
+        oracle_common_snow_allowed_state_min .. _max (default -2 Scheduled .. -1 Implement, the original check).
+      - Credentials only from the Ansible Vault (vault_snow_instance, vault_snow_user, vault_snow_password) or the
+        original names snow_instance, snow_user, snow_password; every task that touches them runs with no_log, and only
+        the ticket number and the record state are printed.
+    options:
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number. Required when the check runs; must match oracle_common_ticket_number_regex.
+      override_chg:
+        type: raw
+        description: Skip the change check. Boolean (default false); the legacy strings "true" / "false" are accepted.
+      oracle_common_override_chg:
+        type: raw
+        description: New name of override_chg (defaults to it).
+      oracle_common_ticket_number_regex:
+        type: str
+        default: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+        description: Python regex for TICKET_NUMBER, anchored with \A ... \Z.
+      oracle_common_snow_instance:
+        type: str
+        no_log: true
+        description:
+          - ServiceNow instance - https URL or bare instance name (https://<name>.<oracle_common_snow_instance_domain>).
+            Default snow_instance, then vault_snow_instance.
+      oracle_common_snow_username:
+        type: str
+        no_log: true
+        description: ServiceNow user. Default snow_user, then vault_snow_user.
+      oracle_common_snow_password:
+        type: str
+        no_log: true
+        description: ServiceNow password. Default snow_password, then vault_snow_password.
+      snow_instance:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow instance, still accepted.
+      snow_user:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow user, still accepted.
+      snow_password:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow password, still accepted.
+      vault_snow_instance:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow instance.
+      vault_snow_user:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow user.
+      vault_snow_password:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow password.
+      oracle_common_snow_instance_domain:
+        type: str
+        default: service-now.com
+        description: Domain appended to a bare instance name.
+      oracle_common_snow_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the ServiceNow instance.
+      oracle_common_snow_timeout:
+        type: int
+        default: 30
+        description: Seconds to wait for ServiceNow.
+      oracle_common_snow_proxy:
+        type: str
+        description: Optional HTTPS proxy for the ServiceNow query (no default). Alias snow_proxy.
+      snow_proxy:
+        type: str
+        description: Alias of oracle_common_snow_proxy.
+      oracle_common_snow_allowed_state_min:
+        type: int
+        default: -2
+        description: Lowest allowed ServiceNow numeric change state (default -2, Scheduled).
+      oracle_common_snow_allowed_state_max:
+        type: int
+        default: -1
+        description: Highest allowed ServiceNow numeric change state (default -1, Implement).
+      oracle_common_snow_change_states:
+        type: dict
+        description: State names returned by servicenow.itsm mapped to ServiceNow numeric states (new -5 ... canceled 4).
+
+  change_ticket_check:
+    short_description: Validate the change-check settings, query the change record and check its state. Used by change_ticket.
+    options: {}
+
+  change_ticket_state:
+    short_description: Check the queried change record (__oracle_common_chg_result) - exactly one record, state in the allowed range.
+    options: {}

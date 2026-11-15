@@ -1,0 +1,82 @@
+---
+# Builds the Teams Adaptive Card for the job state in `call` and the card in `summary_state` (patching | prereq)
+# into __oracle_common_notify_body (and __oracle_common_notify_skip_reason when there is nothing to send). No
+# network and no secret: tests render the card from this file alone. The title, summary and facts are those of
+# the original Office 365 connector card (Database, Host, Change Ticket, URL, Running User, Scheduled Job Name).
+# AAP / AWX job variables: awx_* first, then the tower_* names (the original inputs), then CLI defaults.
+- name: Build the notification card
+  ansible.builtin.set_fact:
+    __oracle_common_notify_skip_reason: >-
+      {{ '' if __oracle_common_notify_card_known
+         else "summary_state '" ~ (summary_state | default('') | string) ~ "' is not one of "
+              ~ (oracle_common_notify_states | list | join(', ')) ~ ': no card is sent' }}
+    __oracle_common_notify_state: "{{ __oracle_common_notify_entry }}"
+    __oracle_common_notify_job_url: "{{ __oracle_common_notify_link }}"
+    __oracle_common_notify_body:
+      type: message
+      attachments:
+        - contentType: application/vnd.microsoft.card.adaptive
+          contentUrl: null
+          content:
+            $schema: http://adaptivecards.io/schemas/adaptive-card.json
+            type: AdaptiveCard
+            version: "1.4"
+            msteams:
+              width: Full
+            fallbackText: "{{ __oracle_common_notify_summary }}: {{ __oracle_common_notify_title }}"
+            body:
+              - type: Container
+                style: "{{ __oracle_common_notify_style }}"
+                bleed: true
+                items:
+                  - type: TextBlock
+                    text: "Job #{{ __oracle_common_notify_job_id }} '{{ __oracle_common_notify_job_name }}'"
+                    size: Medium
+                    weight: Bolder
+                    wrap: true
+                  - type: TextBlock
+                    text: "{{ __oracle_common_notify_summary }}"
+                    isSubtle: true
+                    spacing: None
+                    wrap: true
+              - type: TextBlock
+                text: "{{ __oracle_common_notify_title }}"
+                color: "{{ __oracle_common_notify_entry.colour }}"
+                weight: Bolder
+                wrap: true
+              - type: FactSet
+                facts:
+                  - {title: Database, value: "{{ DATABASE_NAME | default('n/a') | string }}"}
+                  - {title: Host, value: "{{ target | default(inventory_hostname) | string }}"}
+                  - {title: Change Ticket, value: "{{ TICKET_NUMBER | default('n/a') | string }}"}
+                  - {title: URL, value: "{{ __oracle_common_notify_link }}"}
+                  - {title: Running User, value: "{{ __oracle_common_notify_runner }}"}
+                  - {title: Scheduled Job Name, value: "{{ __oracle_common_notify_schedule }}"}
+            actions: >-
+              {{ [{'type': 'Action.OpenUrl', 'title': 'View job', 'url': __oracle_common_notify_link}]
+                 if __oracle_common_notify_link != 'n/a' else [] }}
+  vars:
+    __oracle_common_notify_card: "{{ summary_state | default('') | string }}"
+    __oracle_common_notify_card_known: "{{ __oracle_common_notify_card in oracle_common_notify_states }}"
+    __oracle_common_notify_entry: >-
+      {{ (oracle_common_notify_states[__oracle_common_notify_card] if __oracle_common_notify_card_known else {})
+         .get(call | default('') | string, oracle_common_notify_default_state) }}
+    __oracle_common_notify_style: >-
+      {{ (__oracle_common_notify_entry.colour | lower)
+         if (__oracle_common_notify_entry.colour | lower) in ['good', 'accent', 'attention', 'warning'] else 'emphasis' }}
+    __oracle_common_notify_db: "{{ DATABASE_NAME | default('n/a') | string }}"
+    __oracle_common_notify_summary: >-
+      {{ ("'" ~ __oracle_common_notify_db ~ "' prerequisite check") if __oracle_common_notify_card == 'prereq'
+         else ("'" ~ __oracle_common_notify_db ~ "' is being patched") }}
+    __oracle_common_notify_title: >-
+      {{ ('Database prerequisite check has ' if __oracle_common_notify_card == 'prereq' else 'Database patching has ')
+         ~ __oracle_common_notify_entry.text }}
+    __oracle_common_notify_runner: "{{ awx_user_name | default(tower_user_name | default('scheduler')) | string }}"
+    __oracle_common_notify_schedule: "{{ awx_schedule_name | default(tower_schedule_name | default('manual job')) | string }}"
+    __oracle_common_notify_job_id: "{{ awx_job_id | default(tower_job_id | default('n/a')) | string }}"
+    __oracle_common_notify_job_name: "{{ awx_job_template_name | default(tower_job_template_name | default('manual run')) | string }}"
+    __oracle_common_notify_base: "{{ oracle_common_notify_aap_base_url | default('') | string | regex_replace('/+\\Z', '') }}"
+    __oracle_common_notify_link: >-
+      {{ (__oracle_common_notify_base ~ oracle_common_notify_job_url_path ~ __oracle_common_notify_job_id)
+         if (__oracle_common_notify_base is match(__oracle_common_re_https_url)
+             and __oracle_common_notify_job_id is match('\A[0-9]+\Z')) else 'n/a' }}

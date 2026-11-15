@@ -1,0 +1,44 @@
+---
+# ServiceNow change check (servicenow.itsm.change_request_info). oracle_chg_ticket.yml (playbook directory)
+# includes tasks/change_ticket.yml. The change record TICKET_NUMBER must exist and be in an allowed state.
+#
+# --- Skip the check ---------------------------------------------------------------------------------
+# override_chg (the original input) skips the change check when true. A real boolean now; the legacy strings
+# "true" / "false" (and yes/no, on/off, 1/0) are still accepted. Default false: the check runs.
+oracle_common_override_chg: "{{ override_chg | default(false) }}"
+
+# --- Credentials (Ansible Vault only) -----------------------------------------------------------------
+# Keep them in the Ansible Vault as vault_snow_instance, vault_snow_user and vault_snow_password (see
+# inventory/example/group_vars/all/vault.yml.example) or supply them from an AAP credential. The original input
+# names snow_instance, snow_user and snow_password are still accepted (and win when set).
+# Instance: an https URL (https://<name>.service-now.com or a custom domain) or, as before, the bare instance
+# name, which becomes https://<name>.<oracle_common_snow_instance_domain>.
+oracle_common_snow_instance: "{{ snow_instance | default(vault_snow_instance | default('')) }}"
+oracle_common_snow_username: "{{ snow_user | default(vault_snow_user | default('')) }}"
+oracle_common_snow_password: "{{ snow_password | default(vault_snow_password | default('')) }}"
+# Domain appended to a bare instance name (what the retired servicenow.servicenow modules did).
+oracle_common_snow_instance_domain: service-now.com
+
+# --- Transport --------------------------------------------------------------------------------------
+oracle_common_snow_validate_certs: true
+# Seconds to wait for ServiceNow.
+oracle_common_snow_timeout: 30
+# Optional HTTPS proxy, e.g. http://proxy.example.com:8080 (no default). Alias: snow_proxy.
+oracle_common_snow_proxy: "{{ snow_proxy | default('') }}"
+
+# --- Allowed states -----------------------------------------------------------------------------------
+# The change record's state must be within this range (ServiceNow numeric states, inclusive). The default is
+# the original check: -2 (Scheduled) to -1 (Implement).
+oracle_common_snow_allowed_state_min: -2
+oracle_common_snow_allowed_state_max: -1
+# State names returned by servicenow.itsm mapped to the ServiceNow numeric values (the collection's default
+# change_request mapping). Extend it if the instance has custom states.
+oracle_common_snow_change_states:
+  new: -5
+  assess: -4
+  authorize: -3
+  scheduled: -2
+  implement: -1
+  review: 0
+  closed: 3
+  canceled: 4

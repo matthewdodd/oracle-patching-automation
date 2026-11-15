@@ -1,0 +1,194 @@
+---
+# Teams notification best-effort regression test (roles/oracle_common tasks/notify.yml and notify_send.yml, and the
+# notification.yml wrapper). Nothing is sent anywhere: the only "webhook" is 127.0.0.1:9 (connection refused).
+# Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/notify_best_effort.yml
+#
+# 1. Skipped with a clear message and nothing posted: no webhook URL, the "<CHANGE_ME>" placeholder, an http URL,
+#    notifications turned off.
+# 2. An unreachable webhook (vault_teams_webhook_url, and the alias teams_webhook_url) is attempted, reported as a
+#    WARNING, and the play goes on; the reported error does not contain the webhook URL.
+# 3. The real notification.yml wrapper, in a nested ansible-playbook run at -vvv with the repository ansible.cfg:
+#    an unreachable webhook and an invalid setting (rejected by the role argument spec) both end in a WARNING, the run
+#    succeeds (rc 0, failed=0), and the webhook token never appears in the output.
+# Every case resets the outcome to a sentinel first.
+- name: Teams notification best-effort regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    test_tasks_from: notify
+    call: start
+    summary_state: patching
+    DATABASE_NAME: ORCL01  # noqa: var-naming[pattern] - original input name
+    TICKET_NUMBER: CHG0030001  # noqa: var-naming[pattern] - original input name
+    target: dbhost01.example.com
+    test_token: FAKE-WEBHOOK-TOKEN-0123456789
+    test_webhook: "https://127.0.0.1:9/workflows/{{ test_token }}"
+  tasks:
+    # --- 1. Skipped ----------------------------------------------------------------------------------------
+    - name: Reset the outcome (no webhook URL)
+      ansible.builtin.set_fact: {__oracle_common_notify_skip_reason: __not_run__, __oracle_common_notify_sent: __not_run__}
+    - name: Notify without a webhook URL
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+    - name: Check no webhook URL
+      ansible.builtin.assert:
+        that:
+          - "'no Teams webhook URL is configured' in __oracle_common_notify_skip_reason"
+          - __oracle_common_notify_sent == '__not_run__'
+        fail_msg: "no webhook URL: {{ __oracle_common_notify_skip_reason }} / sent {{ __oracle_common_notify_sent }}"
+        quiet: true
+
+    - name: Reset the outcome (placeholder)
+      ansible.builtin.set_fact: {__oracle_common_notify_skip_reason: __not_run__, __oracle_common_notify_sent: __not_run__}
+    - name: Notify with the placeholder webhook URL
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        vault_teams_webhook_url: "<CHANGE_ME>"
+    - name: Check the placeholder
+      ansible.builtin.assert:
+        that:
+          - "'still the placeholder value' in __oracle_common_notify_skip_reason"
+          - __oracle_common_notify_sent == '__not_run__'
+        fail_msg: "placeholder webhook: {{ __oracle_common_notify_skip_reason }} / sent {{ __oracle_common_notify_sent }}"
+        quiet: true
+
+    - name: Reset the outcome (http URL)
+      ansible.builtin.set_fact: {__oracle_common_notify_skip_reason: __not_run__, __oracle_common_notify_sent: __not_run__}
+    - name: Notify with an http webhook URL
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        vault_teams_webhook_url: "http://127.0.0.1:9/workflows/{{ test_token }}"
+    - name: Check the http URL
+      ansible.builtin.assert:
+        that:
+          - "'not a valid https URL' in __oracle_common_notify_skip_reason"
+          - test_token not in __oracle_common_notify_skip_reason
+          - __oracle_common_notify_sent == '__not_run__'
+        fail_msg: "http webhook: {{ __oracle_common_notify_skip_reason }} / sent {{ __oracle_common_notify_sent }}"
+        quiet: true
+
+    - name: Reset the outcome (turned off)
+      ansible.builtin.set_fact: {__oracle_common_notify_skip_reason: __not_run__, __oracle_common_notify_sent: __not_run__}
+    - name: Notify with notifications turned off
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        vault_teams_webhook_url: "{{ test_webhook }}"
+        oracle_common_notify_enabled: "false"
+    - name: Check turned off
+      ansible.builtin.assert:
+        that:
+          - "'notifications are turned off' in __oracle_common_notify_skip_reason"
+          - __oracle_common_notify_sent == '__not_run__'
+        fail_msg: "turned off: {{ __oracle_common_notify_skip_reason }} / sent {{ __oracle_common_notify_sent }}"
+        quiet: true
+
+    # --- 2. Unreachable webhook ---------------------------------------------------------------------------------
+    - name: Reset the outcome (unreachable webhook)
+      ansible.builtin.set_fact:
+        __oracle_common_notify_skip_reason: __not_run__
+        __oracle_common_notify_sent: __not_run__
+        __oracle_common_notify_error: __not_run__
+    - name: Notify an unreachable webhook (vault_teams_webhook_url)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        vault_teams_webhook_url: "{{ test_webhook }}"
+        oracle_common_notify_timeout: 5
+    - name: Check the unreachable webhook
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_notify_skip_reason == ''
+          - __oracle_common_notify_sent | string == 'False'
+          - __oracle_common_notify_error != '__not_run__'
+          - test_token not in __oracle_common_notify_error
+        fail_msg: "unreachable webhook: sent {{ __oracle_common_notify_sent }}; {{ __oracle_common_notify_error | replace(test_token, '<token>') }}"
+        quiet: true
+
+    - name: Reset the outcome (alias teams_webhook_url)
+      ansible.builtin.set_fact: {__oracle_common_notify_skip_reason: __not_run__, __oracle_common_notify_sent: __not_run__}
+    - name: Notify an unreachable webhook (teams_webhook_url)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        teams_webhook_url: "{{ test_webhook }}"
+        oracle_common_notify_timeout: 5
+    - name: Check the alias teams_webhook_url
+      ansible.builtin.assert:
+        that: [__oracle_common_notify_skip_reason == '', __oracle_common_notify_sent | string == 'False']
+        fail_msg: "teams_webhook_url not used: {{ __oracle_common_notify_skip_reason }} / sent {{ __oracle_common_notify_sent }}"
+        quiet: true
+
+    # --- 3. The notification.yml wrapper in a real run ----------------------------------------------------------
+    - name: Run the notification.yml wrapper in a nested ansible-playbook
+      block:
+        - name: Create a scratch directory for the nested playbook
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: _notify_test
+          register: test_tmp
+
+        - name: Write the nested playbook
+          ansible.builtin.copy:
+            dest: "{{ test_tmp.path }}/notify_wrapper.yml"
+            mode: "0600"
+            content: |
+              - name: notification.yml wrapper
+                hosts: localhost
+                connection: local
+                gather_facts: false
+                vars:
+                  DATABASE_NAME: ORCL01
+                  TICKET_NUMBER: CHG0030001
+                  target: dbhost01.example.com
+                  vault_teams_webhook_url: "{{ test_webhook }}"
+                  oracle_common_notify_timeout: 5
+                tasks:
+                  - name: Unreachable webhook
+                    ansible.builtin.include_tasks: {{ playbook_dir }}/../notification.yml
+                    vars: {call: fail, summary_state: patching}
+                  - name: Invalid setting (rejected by the role argument spec)
+                    ansible.builtin.include_tasks: {{ playbook_dir }}/../notification.yml
+                    vars: {call: success_prereq, summary_state: prereq, oracle_common_notify_timeout: not-a-number}
+                  - name: Reached the end
+                    ansible.builtin.debug:
+                      msg: NESTED_RUN_COMPLETED
+
+        - name: Run the nested playbook (repository ansible.cfg, -vvv)
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+              - -vvv
+              - -i
+              - localhost,
+              - -c
+              - local
+              - "{{ test_tmp.path }}/notify_wrapper.yml"
+            chdir: "{{ playbook_dir }}/.."
+          environment:
+            ANSIBLE_ROLES_PATH: "{{ playbook_dir }}/../roles"
+          register: test_nested
+          changed_when: false
+          failed_when: false
+      always:
+        - name: Remove the scratch directory
+          ansible.builtin.file:
+            path: "{{ test_tmp.path }}"
+            state: absent
+          when: test_tmp.path is defined
+
+    - name: Check the nested run
+      ansible.builtin.assert:
+        that:
+          - test_nested.rc == 0
+          - "'NESTED_RUN_COMPLETED' in __test_nested_out"
+          - "__test_nested_out is search('failed=0')"
+          # The YAML callback folds long messages and doubles single quotes.
+          - "__test_nested_out is search(\"WARNING:\\\\s+Teams\\\\s+notification\\\\s+'+fail'+\\\\s+was\\\\s+not\\\\s+sent\")"
+          - "__test_nested_out is search(\"WARNING:\\\\s+Teams\\\\s+notification\\\\s+'+success_prereq'+\\\\s+was\\\\s+not\\\\s+sent\")"
+          - test_token not in __test_nested_out
+        fail_msg: >-
+          nested wrapper run: rc {{ test_nested.rc }};
+          token leaked: {{ test_token in __test_nested_out }};
+          tail: {{ __test_nested_out[-1500:] | replace(test_token, '<token>') }}
+        quiet: true
+      vars:
+        __test_nested_out: "{{ test_nested.stdout | default('') ~ '\n' ~ test_nested.stderr | default('') }}"

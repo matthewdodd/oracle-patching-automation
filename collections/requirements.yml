@@ -2,19 +2,12 @@
 # Install with:
 #   ansible-galaxy collection install -r collections/requirements.yml -p collections
 # (or into any path on ANSIBLE_COLLECTIONS_PATH). Only collections the code uses, pinned exactly.
+# The Teams notification uses ansible.builtin.uri (no collection); community.general (office_365_connector_card)
+# and the deprecated servicenow.servicenow (snow_record_find) are no longer needed.
 collections:
   # ansible.cfg: callbacks_enabled = ansible.posix.profile_tasks (per-task timing output).
   - name: ansible.posix
     version: "2.2.2"
-  # ServiceNow change check. The target module set; oracle_chg_ticket.yml moves to it in a later unit.
+  # ServiceNow change check: servicenow.itsm.change_request_info (roles/oracle_common/tasks/change_ticket_check.yml).
   - name: servicenow.itsm
     version: "2.17.0"
-  # TEMPORARY: provides community.general.office_365_connector_card used by notification.yml today.
-  # Removed when the notification moves to a Teams Workflows webhook (ansible.builtin.uri).
-  - name: community.general
-    version: "14.0.1"
-  # TEMPORARY: provides snow_record_find (ansible-core routes the short name to
-  # servicenow.servicenow.snow_record_find) used by oracle_chg_ticket.yml today. The collection is
-  # deprecated upstream; removed when the change check moves to servicenow.itsm.
-  - name: servicenow.servicenow
-    version: "1.0.6"
