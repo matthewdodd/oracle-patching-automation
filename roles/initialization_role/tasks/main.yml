@@ -75,8 +75,7 @@
         __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed | bool }}"
 
     - name: Create roles/oracle_database_patch_role/files if not exist
-      # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
-      copy:  # noqa: fqcn[action-core]
+      ansible.builtin.copy:
         # role_path-based so the source does not depend on the playbook directory.
         src: "{{ role_path }}/../oracle_database_patch_role/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"

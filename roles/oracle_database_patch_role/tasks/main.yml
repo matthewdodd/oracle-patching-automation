@@ -8,12 +8,13 @@
 # Each step runs asynchronously (tasks/patch_step.yml: oracle_common_patch_timeout, polled every
 # oracle_common_patch_poll_delay seconds up to oracle_common_patch_poll_retries times).
 
-# Original fact names. The script and directory modes come from oracle_common (oracle_common_modes.script and .dir,
-# default 0750; 0777 is not allowed).
+# Original fact names. server_name is the current host (it was the whole target string, which broke runs with several
+# targets). The script and directory modes come from oracle_common (oracle_common_modes.script and .dir, default 0750;
+# 0777 is not allowed).
 - name: Set the database and host facts
   ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] var-naming[pattern] - original fact names, kept for compatibility
     ORACLE_SID: "{{ DATABASE_NAME }}"
-    server_name: "{{ target }}"
+    server_name: "{{ inventory_hostname }}"
 
 - name: Copy Scripts to {{ remote_script_directory }}
   # Written as the database owner, who owns remote_script_directory (no longer world-writable).
@@ -21,8 +22,7 @@
   become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   block:
     - name: Create roles/oracle_database_patch_role/files if not exist
-      # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
-      copy:  # noqa: fqcn[action-core]
+      ansible.builtin.copy:
         # role_path-based so the source does not depend on the playbook directory.
         src: "{{ role_path }}/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"

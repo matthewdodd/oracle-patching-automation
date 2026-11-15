@@ -120,8 +120,9 @@
 
     - name: Check the patch step timeout and script inputs come from the variables
       vars:
-        run_task: "{{ patch_step | first }}"
-        wait_task: "{{ patch_step[1] }}"
+        run_task: "{{ patch_step | select('contains', 'ansible.builtin.command') | first }}"
+        wait_task: "{{ patch_step | select('contains', 'ansible.builtin.async_status') | first }}"
+        progress_tasks: "{{ patch_step | select('contains', 'ansible.builtin.include_role') | list }}"
       ansible.builtin.assert:
         that:
           - run_task.async is search('oracle_common_patch_timeout')
@@ -131,7 +132,12 @@
           - wait_task.retries is search('oracle_common_patch_poll_retries')
           - wait_task.delay is search('oracle_common_patch_poll_delay')
           - wait_task.become_user == run_task.become_user
-        fail_msg: "patch_step.yml: async timeout, polling or script inputs no longer come from the variables"
+          # Progress is recorded before the step runs and after its result is checked (failure report).
+          - progress_tasks | length == 2
+          - patch_step.index(progress_tasks[0]) < patch_step.index(run_task)
+          - patch_step.index(progress_tasks[1]) == patch_step | length - 1
+          - progress_tasks | map('to_json') | select('search', '"tasks_from"[:] "progress"') | list | length == 2
+        fail_msg: "patch_step.yml: async timeout, polling, progress or script inputs no longer come from the variables"
 
     - name: Check every database_patch.bash call in the prerequisite checks
       vars:
@@ -225,12 +231,30 @@
                 STUB_RC: "0"
 
         - name: Run tasks/patch_step.yml (datapatch, succeeds)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
             tasks_from: patch_step
           vars:
             __oracle_database_patch_role_step: datapatch
             __oracle_database_patch_role_step_sid: ORCL02
+
+        - name: Check the progress of the successful datapatch step
+          ansible.builtin.assert:
+            that: "oracle_common_progress == {'datapatch': {'ORCL02': 'done'}}"
+            fail_msg: "unexpected progress: {{ oracle_common_progress | default('none') }}"
+
+        - name: Run tasks/patch_step.yml (apply_home, succeeds)
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
+            tasks_from: patch_step
+          vars:
+            __oracle_database_patch_role_step: apply_home
+            __oracle_database_patch_role_step_sid: ORCL02
+
+        - name: Check the progress of the successful apply_home step
+          ansible.builtin.assert:
+            that: "oracle_common_progress == {'home': 'patched', 'datapatch': {'ORCL02': 'done'}}"
+            fail_msg: "unexpected progress: {{ oracle_common_progress | default('none') }}"
 
         - name: Read what the stub received
           ansible.builtin.slurp:
@@ -255,8 +279,8 @@
               ansible.builtin.set_fact:
                 oracle_common_script_env: {ORCL02: {STUB_RC: "1"}}
             - name: Run tasks/patch_step.yml (apply_home, fails)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+              ansible.builtin.include_role:
+                name: oracle_database_patch_role
                 tasks_from: patch_step
               vars:
                 __oracle_database_patch_role_step: apply_home
@@ -270,7 +294,9 @@
                 that:
                   - "'database_patch.bash apply_home for ORCL02 failed with exit code 1' in ansible_failed_result.msg | default('')"
                   - "'left shut down' in ansible_failed_result.msg | default('')"
-                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+                  # The home is recorded as being patched (unknown state), datapatch of the earlier step stays done.
+                  - "oracle_common_progress == {'home': 'patching', 'datapatch': {'ORCL02': 'done'}}"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ oracle_common_progress | default('none') }}"
 
         - name: Fail a step that outlives the polling window
           block:
@@ -281,8 +307,8 @@
                 oracle_common_patch_poll_delay: 1
                 oracle_common_patch_poll_retries: 2
             - name: Run tasks/patch_step.yml (apply, too slow)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+              ansible.builtin.include_role:
+                name: oracle_database_patch_role
                 tasks_from: patch_step
               vars:
                 __oracle_database_patch_role_step: apply
@@ -295,7 +321,8 @@
               ansible.builtin.assert:
                 that:
                   - "'database_patch.bash apply for ORCL02 had not finished after 2 s of polling' in ansible_failed_result.msg | default('')"
-                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+                  - "oracle_common_progress == {'home': 'patching', 'datapatch': {'ORCL02': 'running'}}"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ oracle_common_progress | default('none') }}"
       always:
         - name: Remove the temporary directory
           ansible.builtin.file:
@@ -335,8 +362,8 @@
             initialization_role_created_paths: []
 
         - name: Create a new per-run directory
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             __initialization_role_dir: "{{ dirs_tmp.path }}/scripts_r1"
@@ -344,8 +371,8 @@
             __initialization_role_dir_remove: true
 
         - name: Create a new per-run working directory (kept by the cleanup)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             __initialization_role_dir: "{{ dirs_tmp.path }}/output_r1"
@@ -363,8 +390,8 @@
         - name: Refuse the directory of another run
           block:
             - name: Use the directory of another run (must fail)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/initialization_role"
+              ansible.builtin.include_role:
+                name: initialization_role
                 tasks_from: run_dir
               vars:
                 __initialization_role_dir: "{{ dirs_tmp.path }}/other_run"
@@ -384,8 +411,8 @@
         - name: Refuse a planted symbolic link
           block:
             - name: Use a planted symbolic link (must fail)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/initialization_role"
+              ansible.builtin.include_role:
+                name: initialization_role
                 tasks_from: run_dir
               vars:
                 __initialization_role_dir: "{{ dirs_tmp.path }}/planted"
@@ -403,8 +430,9 @@
                 fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / {{ initialization_role_created_paths }}"
 
         - name: Re-use an existing directory with the original fixed names (not recorded)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          # noqa reason - not variables of this role: oracle_common_run is shared (set by oracle_common).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
             tasks_from: run_dir
           vars:
             oracle_common_run: {id: r1, unique: false}
@@ -423,8 +451,8 @@
             oracle_database_patch_role_created_paths: [{path: "{{ dirs_tmp.path }}/staging_r1", owner: "{{ dirs_user.stdout }}", remove: true}]
 
         - name: Run the cleanup
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
             tasks_from: clean_files_from_server
 
         - name: List what is left

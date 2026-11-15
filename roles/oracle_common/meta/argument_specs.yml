@@ -496,3 +496,62 @@ argument_specs:
   change_ticket_state:
     short_description: Check the queried change record (__oracle_common_chg_result) - exactly one record, state in the allowed range.
     options: {}
+
+  progress:
+    short_description: Record how far this run got on the host (oracle_common_progress), for the failure report.
+    description:
+      - Merges oracle_common_progress_update into oracle_common_progress (recursive combine). Keys - databases
+        (per SID - starting, started, stopping or stopped; standalone_control_role), home (patching or patched) and
+        datapatch (per SID - running or done; oracle_database_patch_role tasks/patch_step.yml).
+    options:
+      oracle_common_progress_update:
+        type: dict
+        required: true
+        description: "The progress to record, e.g. {databases: {ORCL01: stopped}}."
+
+  failure_record:
+    short_description: Record the failed stage, task, error, exit code and last output lines (oracle_common_failure).
+    description:
+      - Call it first in a rescue section that runs other tasks (a cleanup) before tasks/failure_report.yml, so they
+        cannot replace ansible_failed_task / ansible_failed_result.
+    options:
+      oracle_common_failure_stage:
+        type: str
+        required: true
+        description: Name of the failed stage, e.g. Initialize, Shutdown, Patch.
+      oracle_common_failure_msg_max_length:
+        type: int
+        default: 2000
+        description: Longest error message kept from the failed task (characters).
+      oracle_common_failure_output_lines:
+        type: int
+        default: 10
+        description: Last lines of the failed task's output added to the report; 0 leaves them out.
+
+  failure_report:
+    short_description: End a failed stage - notification (best effort), then a failure with the state left behind.
+    description:
+      - Records the failure first unless tasks/failure_record.yml already did for this stage.
+      - Shows and reports the state left behind (oracle_common_failure_state) - databases this run stopped or failed to
+        start, whether the Oracle home was patched (unknown when a patch step failed part-way), datapatch per database,
+        and the files kept for diagnosis or removed - from oracle_common_progress and oracle_common_run.
+      - Sends the notification through tasks/notify.yml (a send error is a WARNING, never fatal), then fails the host
+        with "Fail - <stage> failed on <host> in task '<task>' - <error>" and the state.
+    options:
+      oracle_common_failure_stage:
+        type: str
+        required: true
+        description: Name of the failed stage, e.g. Initialize, Shutdown, Patch.
+      oracle_common_failure_call:
+        type: str
+        default: fail
+        description: Notification state (the prerequisite rescue passes unneeded for an already applied patch with
+          oracle_common_fail_when_already_applied).
+      oracle_common_failure_summary_state:
+        type: str
+        default: patching
+        description: Notification card (patching or prereq).
+      oracle_common_failure_cleanup_done:
+        type: bool
+        default: false
+        description: true when the rescue removed this run's script and staging directories before the report.

@@ -4,6 +4,18 @@
 # oracle_common_patch_timeout seconds (default 14400) and is checked every oracle_common_patch_poll_delay seconds up to
 # oracle_common_patch_poll_retries times (the polling window never exceeds the timeout; oracle_common preflight_scope.yml).
 # The output is always shown; a step that fails or does not finish in time fails the task with a clear message.
+# The step records its progress (oracle_common_progress: home patching / patched, datapatch <SID> running / done; roles/
+# oracle_common tasks/progress.yml) so a failure report can say whether the home was patched and where datapatch ran.
+- name: Record the start of {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: progress
+  vars:
+    oracle_common_progress_update: >-
+      {{ ({'home': 'patching'} if __oracle_database_patch_role_step in ['apply', 'apply_home'] else {})
+         | combine({'datapatch': {__oracle_database_patch_role_step_sid: 'running'}}
+                   if __oracle_database_patch_role_step in ['apply', 'datapatch'] else {}) }}
+
 - name: Run database_patch.bash {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
   ansible.builtin.command:
     argv:
@@ -51,3 +63,13 @@
                ~ oracle_common_run.databases[__oracle_database_patch_role_step_sid].work_dir) }}.
       The database is left shut down and the staged patch is kept for diagnosis.
     quiet: true
+
+- name: Record the end of {{ __oracle_database_patch_role_step ~ ' for ' ~ __oracle_database_patch_role_step_sid }}
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: progress
+  vars:
+    oracle_common_progress_update: >-
+      {{ ({'home': 'patched'} if __oracle_database_patch_role_step in ['apply', 'apply_home'] else {})
+         | combine({'datapatch': {__oracle_database_patch_role_step_sid: 'done'}}
+                   if __oracle_database_patch_role_step in ['apply', 'datapatch'] else {}) }}

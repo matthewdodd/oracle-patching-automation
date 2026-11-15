@@ -1,23 +1,24 @@
 ---
-### This script starts the database. No shell: the script and its arguments are passed as an argument vector, so no
-### value (ORACLE_SID, directories) can run a command.
+### Starts the database with the database control script (copied by copy_scripts.yml). No shell: the script and its
+### arguments are passed as an argument vector, so no value (ORACLE_SID, directories) can run a command.
+### Exit code 0: started; 4: reported as a failure by the next task, as before; anything else fails this task.
 
-- name: start oracle database on {{ server_name }}  # noqa: name[casing] - original task name
+- name: Start oracle database on {{ server_name }}
   ansible.builtin.command:
     argv:
-      - "{{ remote_script_directory }}/{{ start_database_script }}"
+      - "{{ remote_script_directory }}/{{ standalone_control_role_start_database_script }}"
       - start
       - "{{ ORACLE_SID }}"
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
   environment: "{{ standalone_control_role_environment }}"
-  register: db_start_status  # noqa: var-naming[no-role-prefix] - original register name
-  changed_when: true
+  register: standalone_control_role_db_start_status
+  changed_when: standalone_control_role_db_start_status.rc == 0
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  failed_when: db_start_status.rc != 4 and db_start_status.rc != 0
+  failed_when: standalone_control_role_db_start_status.rc not in [0, 4]
 
-- name: print start_database_script status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+- name: Print start_database_script status for {{ ORACLE_SID }}
   ansible.builtin.debug:
-    msg: "{{ db_start_status.stdout_lines }}"
-  failed_when: db_start_status.rc == 4
+    msg: "{{ standalone_control_role_db_start_status.stdout_lines }}"
+  failed_when: standalone_control_role_db_start_status.rc == 4

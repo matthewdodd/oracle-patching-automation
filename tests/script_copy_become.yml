@@ -16,13 +16,8 @@
     copy_task_files:
       - roles/initialization_role/tasks/main.yml
       - roles/oracle_database_patch_role/tasks/main.yml
-      - roles/standalone_control_role/tasks/check_alert_log.yml
-      - roles/standalone_control_role/tasks/check_listener_logs.yml
-      - roles/standalone_control_role/tasks/rename_logs.yml
-      - roles/standalone_control_role/tasks/start_pdb_listener.yml
-      - roles/standalone_control_role/tasks/stop_database.yml
-      - roles/standalone_control_role/tasks/stop_listener.yml
-      - roles/standalone_control_role/tasks/stop_pdb_listener.yml
+      # One task copies every control script before any startup or shutdown step.
+      - roles/standalone_control_role/tasks/copy_scripts.yml
   tasks:
     - name: Check every copy into remote_script_directory becomes the database owner
       vars:
@@ -47,8 +42,10 @@
         copy_tasks: >-
           {%- set out = [] -%}
           {%- for t in flat_tasks -%}
-          {#-   bracket access: t.module.copy would resolve to the dict.copy method -#}
-          {%-   set m = t.module['copy'] | default(t.module['ansible.builtin.copy'] | default(none)) -%}
+          {#-   FQCN first, with 'in' tests: t.module.copy (and t.module['copy'] on a dict without that key) resolves to
+                the dict.copy method instead of the task's arguments -#}
+          {%-   set m = t.module['ansible.builtin.copy'] if 'ansible.builtin.copy' in t.module
+                    else (t.module['copy'] if 'copy' in t.module else none) -%}
           {%-   if m is mapping and 'remote_script_directory' in (m['dest'] | default('')) -%}
           {%-     set _ = out.append(t) -%}
           {%-   endif -%}

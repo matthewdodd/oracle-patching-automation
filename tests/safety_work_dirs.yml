@@ -130,8 +130,9 @@
             fail_msg: "unexpected: {{ oracle_common_run }}"
 
         - name: Remove the directories of an earlier run (run r1)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
             tasks_from: init_clean
           vars:
             remote_script_directory: "{{ oracle_common_run.script_dir }}"
@@ -142,8 +143,8 @@
             initialization_role_created_paths: []
 
         - name: Create the directories (run r1)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             __initialization_role_dir: "{{ item.path }}"
@@ -184,8 +185,9 @@
             fail_msg: "unexpected: {{ oracle_common_run }}"
 
         - name: Remove the directories of an earlier run (run r2)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
             tasks_from: init_clean
           vars:
             remote_script_directory: "{{ oracle_common_run.script_dir }}"
@@ -196,8 +198,8 @@
             initialization_role_created_paths: []
 
         - name: Create the directories (run r2)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             __initialization_role_dir: "{{ item.path }}"
@@ -224,8 +226,8 @@
             mode: "0600"
 
         - name: Re-use the explicit directories when they could not be removed (run 3, no init_clean.yml)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             initialization_role_created_paths: []
@@ -267,8 +269,9 @@
             mode: "0700"
 
         - name: Run init_clean.yml with generated per-run directories
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
             tasks_from: init_clean
           vars:
             remote_script_directory: "{{ oracle_common_run.script_dir }}"
@@ -282,8 +285,8 @@
         - name: Refuse the planted per-run directory
           block:
             - name: Use the planted per-run directory (must fail)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/initialization_role"
+              ansible.builtin.include_role:
+                name: initialization_role
                 tasks_from: run_dir
               vars:
                 initialization_role_created_paths: []
@@ -304,8 +307,9 @@
 
         # --- 5. The parent directory --------------------------------------------------------------------------------
         - name: Create a directory whose parent does not exist yet (first run on a fresh host)
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
             tasks_from: run_dir
           vars:
             initialization_role_created_paths: []
@@ -345,8 +349,8 @@
         - name: Refuse a world-writable parent without the sticky bit
           block:
             - name: Use a directory under the world-writable parent (must fail)
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/initialization_role"
+              ansible.builtin.include_role:
+                name: initialization_role
                 tasks_from: run_dir
               vars:
                 initialization_role_created_paths: []
@@ -371,8 +375,8 @@
                 fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
 
         - name: Accept a world-writable parent with the sticky bit (like /tmp), with the warning
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/initialization_role"
+          ansible.builtin.include_role:
+            name: initialization_role
             tasks_from: run_dir
           vars:
             initialization_role_created_paths: []

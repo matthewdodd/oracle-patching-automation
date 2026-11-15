@@ -1,26 +1,28 @@
 ---
-## This script starts the listener. The output is logged to <remote_output_directory>/log.<start_listener_script>.
-## <YYYY.MM.DD>, as before, and the exit code is the script's own (as with the original process substitution). No
-## shell interpolation: a static bash script gets every value as a positional parameter.
+## Starts the listener with the listener control script (copied by copy_scripts.yml). The output is logged to
+## <remote_output_directory>/log.<start_listener_script>.<YYYY.MM.DD>, as before, and the exit code is the script's own
+## (as with the original process substitution). No shell interpolation: a static bash script gets every value as a
+## positional parameter. The original always ran listener_ctl.bash here; it is now the configured listener script
+## (start_listener_script, default listener_ctl.bash), which start_pdb_listener.yml already used.
 
 - name: Start listener {{ sid_server_dict[standalone_control_role_sid_key].dbListener ~ ' in ' ~ ORACLE_SID ~ ' on ' ~ server_name }}
   ansible.builtin.command:
     argv: >-
       {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'start_listener',
-          remote_output_directory ~ '/log.' ~ start_listener_script,
-          remote_script_directory ~ '/listener_ctl.bash', 'start', ORACLE_SID]
+          remote_output_directory ~ '/log.' ~ standalone_control_role_start_listener_script,
+          remote_script_directory ~ '/' ~ standalone_control_role_start_listener_script, 'start', ORACLE_SID]
          + (sid_server_dict[standalone_control_role_sid_key].dbListener | string).split() }}
     expand_argument_vars: false
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
   environment: "{{ standalone_control_role_environment }}"
-  register: listener_start_status  # noqa: var-naming[no-role-prefix] - original register name
-  changed_when: true
+  register: standalone_control_role_listener_start_status
+  changed_when: standalone_control_role_listener_start_status.rc == 0
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0
+  failed_when: standalone_control_role_listener_start_status.rc not in [0, 4]
 
-- name: print start_listener_script status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+- name: Print start_listener_script status for {{ ORACLE_SID }}
   ansible.builtin.debug:
-    msg: "{{ listener_start_status.stdout_lines }}"
-  failed_when: listener_start_status.rc == 4
+    msg: "{{ standalone_control_role_listener_start_status.stdout_lines }}"
+  failed_when: standalone_control_role_listener_start_status.rc == 4

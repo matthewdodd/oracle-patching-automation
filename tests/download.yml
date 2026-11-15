@@ -85,8 +85,9 @@
 
         # --- 1. right checksum ---------------------------------------------------------------------------------
         - name: Download and extract the bundle
-          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-            name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+          # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: oracle_database_patch_role
             tasks_from: copy_files_to_server
           vars:
             temp_dir: "{{ dl_tmp.path }}/staging_t1"
@@ -115,8 +116,9 @@
         - name: Download with a wrong checksum
           block:
             - name: Run the download with a wrong checksum
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
                 tasks_from: copy_files_to_server
               vars:
                 temp_dir: "{{ dl_tmp.path }}/staging_t2"
@@ -144,8 +146,9 @@
         - name: Download from an unreachable repository with credentials
           block:
             - name: Run the download from an unreachable repository
-              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
-                name: "{{ playbook_dir }}/../roles/oracle_database_patch_role"
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
                 tasks_from: copy_files_to_server
               vars:
                 temp_dir: "{{ dl_tmp.path }}/staging_t3"

@@ -1,0 +1,8 @@
+---
+# One dbvip case for tests/standalone_commands.yml (include variables vip_entry, vip_expected). Include parameters win
+# over the sid_server_dict fact of the test play.
+- name: Check the database VIP the control role reads ({{ vip_expected or 'empty' }})
+  ansible.builtin.assert:
+    that: __standalone_control_role_vip == vip_expected
+    fail_msg: "dbvip {{ vip_entry }}: got '{{ __standalone_control_role_vip }}', expected '{{ vip_expected }}'"
+    quiet: true

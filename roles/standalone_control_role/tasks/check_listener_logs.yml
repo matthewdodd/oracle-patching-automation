@@ -1,20 +1,9 @@
 ---
-## This script copies the check_listener_logs.bash script to server and checks the listener logs for errors and warnings.
-## Logged as before (<remote_output_directory>/log.<check_listenerLogs_script>.<YYYY.MM.DD>); no shell interpolation.
-
-- name: copy check_listener_logs script to {{ server_name }}  # noqa: name[casing] - original task name
-  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
-  copy:  # noqa: fqcn[action-core]
-    src: "{{ check_listenerLogs_script }}"
-    dest: "{{ remote_script_directory }}/{{ check_listenerLogs_script }}"
-    mode: "{{ oracle_common_modes.script }}"
-    force: true
-  delegate_to: "{{ server_name }}"
-  # Written as the database owner: remote_script_directory belongs to that user and is no longer
-  # world-writable (0777 removed), so the SSH user cannot write into it.
-  become: true
-  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-
+## Checks the listener logs for errors with check_listener_logs.bash (copied by copy_scripts.yml). Logged as before
+## (<remote_output_directory>/log.<check_listenerLogs_script>.<YYYY.MM.DD>); no shell interpolation.
+## Exit code 4 (a log has errors or is missing) is a WARNING by default, as before (the original printed it as an
+## ignored failure); standalone_control_role_fail_on_listener_log_errors: true makes it fail the startup. Any other
+## non-zero exit code fails, as before.
 
 # The listener names (dbListener, pdbListener) follow ORACLE_SID as before; an empty one is left out, as the original
 # shell's word splitting did.
@@ -22,22 +11,38 @@
   ansible.builtin.command:
     argv: >-
       {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'check_listener_logs',
-          remote_output_directory ~ '/log.' ~ check_listenerLogs_script,
-          remote_script_directory ~ '/' ~ check_listenerLogs_script, ORACLE_SID]
+          remote_output_directory ~ '/log.' ~ standalone_control_role_check_listener_logs_script,
+          remote_script_directory ~ '/' ~ standalone_control_role_check_listener_logs_script, ORACLE_SID]
          + (sid_server_dict[standalone_control_role_sid_key].dbListener | string).split()
          + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
     expand_argument_vars: false
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
   environment: "{{ standalone_control_role_environment }}"
-  register: check_listenerLogs_status  # noqa: var-naming[pattern] - original register name
+  register: standalone_control_role_listener_logs_status
   changed_when: false
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  failed_when: check_listenerLogs_status.rc != 4 and check_listenerLogs_status.rc != 0
+  failed_when: standalone_control_role_listener_logs_status.rc not in [0, 4]
 
-- name: print check_listenerLogs status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+- name: Print check_listenerLogs status for {{ ORACLE_SID }}
   ansible.builtin.debug:
-    msg: "{{ check_listenerLogs_status.stdout_lines }}"
-  failed_when: check_listenerLogs_status.rc == 4
-  ignore_errors: true
+    msg: "{{ standalone_control_role_listener_logs_status.stdout_lines }}"
+
+- name: Report listener log errors for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: the listener log check of {{ ORACLE_SID }} found errors or a missing log (exit code 4, see the output
+      above); the run goes on (standalone_control_role_fail_on_listener_log_errors is false).
+  when:
+    - standalone_control_role_listener_logs_status.rc == 4
+    - not (standalone_control_role_fail_on_listener_log_errors | bool)
+
+- name: Fail on listener log errors for {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that: standalone_control_role_listener_logs_status.rc != 4
+    fail_msg: >-
+      The listener log check of {{ ORACLE_SID }} found errors or a missing log (exit code 4, see the output above) and
+      standalone_control_role_fail_on_listener_log_errors is true. The database and its listener are started.
+    quiet: true
+  when: standalone_control_role_fail_on_listener_log_errors | bool

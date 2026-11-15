@@ -2,19 +2,6 @@
 ## This script stops the PDB listener. Logged as before; exit code kept (0 = stopped, 4 = already stopped,
 ## anything else fails), see stop_listener.yml.
 
-- name: copy PDB listener script to {{ server_name }}  # noqa: name[casing] - original task name
-  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
-  copy:  # noqa: fqcn[action-core]
-    src: "{{ stop_pdbListener_script }}"
-    dest: "{{ remote_script_directory }}/{{ stop_pdbListener_script }}"
-    mode: "{{ oracle_common_modes.script }}"
-    force: true
-  delegate_to: "{{ server_name }}"
-  # Written as the database owner: remote_script_directory belongs to that user and is no longer
-  # world-writable (0777 removed), so the SSH user cannot write into it.
-  become: true
-  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-
 - name: Stopping PDB listener for {{ ORACLE_SID ~ ' on ' ~ server_name }}
   ansible.builtin.command:
     argv:
@@ -23,10 +10,10 @@
       # Static script; the values are passed as positional parameters, never interpolated into it.
       - set -o pipefail; "$1" stop "$2" "$3" 2>&1 | tee "$4.$(date +%Y.%m.%d)"
       - stop_pdb_listener
-      - "{{ remote_script_directory }}/{{ stop_pdbListener_script }}"
+      - "{{ remote_script_directory }}/{{ standalone_control_role_stop_pdb_listener_script }}"
       - "{{ ORACLE_SID }}"
       - "{{ sid_server_dict[standalone_control_role_sid_key].pdbListener }}"
-      - "{{ remote_output_directory }}/log.{{ stop_pdbListener_script }}"
+      - "{{ remote_output_directory }}/log.{{ standalone_control_role_stop_pdb_listener_script }}"
     expand_argument_vars: false
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.

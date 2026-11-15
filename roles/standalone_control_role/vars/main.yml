@@ -21,3 +21,11 @@ __standalone_control_role_sid_key: >-
 # every value is a positional parameter (never interpolated into the script, so no value can run a command). stdout and
 # stderr go to the task output and to <log prefix>.<YYYY.MM.DD>; the exit code is the script's own, as before.
 __standalone_control_role_logged_run: 'log=$1; shift; "$@" 2>&1 | tee "$log.$(date +%Y.%m.%d)"; exit "${PIPESTATUS[0]}"'
+
+# The database VIP (sid_server_dict[<key>].dbvip); empty when it is not set, which skips the VIP ping check.
+__standalone_control_role_vip: "{{ sid_server_dict[standalone_control_role_sid_key].dbvip | default('', true) | string | trim }}"
+
+# The database name under which the start and stop steps record their progress (oracle_common_progress.databases): the
+# SID as given in the patch scope when oracle_control_sid.yml passes it, else ORACLE_SID.
+__standalone_control_role_progress_sid: >-
+  {{ standalone_control_role_sid if (standalone_control_role_sid | default('') | string | length > 0) else ORACLE_SID }}

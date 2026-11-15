@@ -3,24 +3,10 @@
 ### applied next). A failed shutdown fails the task (it used to be ignored, so the patch could be applied to a home
 ### whose database was still running).
 
-- name: copy stop_database_script to {{ server_name }}  # noqa: name[casing] - original task name
-  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
-  copy:  # noqa: fqcn[action-core]
-    src: "{{ stop_database_script }}"
-    dest: "{{ remote_script_directory }}/{{ stop_database_script }}"
-    mode: "{{ oracle_common_modes.script }}"
-    force: true
-  delegate_to: "{{ server_name }}"
-  # Written as the database owner: remote_script_directory belongs to that user and is no longer
-  # world-writable (0777 removed), so the SSH user cannot write into it.
-  become: true
-  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-
-# database_ctl.bash stop: 0 = stopped (or already stopped), anything else = the database is still running.
 - name: Shutdown oracle database {{ ORACLE_SID }}
   ansible.builtin.command:
     argv:
-      - "{{ remote_script_directory }}/{{ stop_database_script }}"
+      - "{{ remote_script_directory }}/{{ standalone_control_role_stop_database_script }}"
       - stop
       - "{{ ORACLE_SID }}"
   delegate_to: "{{ server_name }}"
@@ -32,7 +18,7 @@
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
 
-- name: print Shutdown db status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+- name: Print Shutdown db status for {{ ORACLE_SID }}
   ansible.builtin.debug:
     msg: "{{ standalone_control_role_db_stop_status.stdout_lines | default([]) + standalone_control_role_db_stop_status.stderr_lines | default([]) }}"
 
@@ -40,7 +26,7 @@
   ansible.builtin.assert:
     that: standalone_control_role_db_stop_status.rc | default(1) == 0
     fail_msg: >-
-      The shutdown of database {{ ORACLE_SID }} failed ({{ stop_database_script }} stop exited with
+      The shutdown of database {{ ORACLE_SID }} failed ({{ standalone_control_role_stop_database_script }} stop exited with
       {{ standalone_control_role_db_stop_status.rc | default('no exit code') }}); nothing is patched while it may still be
       running. See the output above.
     quiet: true

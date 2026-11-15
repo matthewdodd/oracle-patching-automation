@@ -15,9 +15,10 @@
     __oracle_database_patch_role_unique: >-
       {{ not (oracle_common_run.staging_fixed | default(not (oracle_common_run.unique | default(false) | bool)) | bool) }}
   block:
+    # download_dir in the original (only ever used inside this file).
     - name: Set the download directory
-      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
-        download_dir: "{{ temp_dir }}"
+      ansible.builtin.set_fact:
+        oracle_database_patch_role_download_dir: "{{ temp_dir }}"
 
     - name: Remove the prior staging directory (fixed or explicitly given directory only) {{ temp_dir }}
       ansible.builtin.file:
@@ -62,7 +63,7 @@
     - name: Download the patch bundle (TLS and checksum verified) {{ artf_file_name }}
       ansible.builtin.get_url:
         url: '{{ oracle_common_patch.repo_dir_url }}/{{ artf_file_name }}'
-        dest: '{{ download_dir }}/{{ artf_file_name }}'
+        dest: '{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}'
         checksum: "{{ oracle_common_patch_checksum }}"
         validate_certs: "{{ (oracle_common_patch_validate_certs | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
         ca_path: "{{ oracle_common_patch_ca_path if (oracle_common_patch_ca_path | default('') | length > 0) else omit }}"
@@ -107,15 +108,15 @@
     - name: Extract the patch bundle {{ artf_file_name }}
       ansible.builtin.unarchive:
         remote_src: true
-        src: "{{ download_dir }}/{{ artf_file_name }}"
+        src: "{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}"
         dest: "{{ temp_dir }}"
 
-    - name: Remove the downloaded bundle {{ download_dir ~ '/' ~ artf_file_name }}
+    - name: Remove the downloaded bundle {{ oracle_database_patch_role_download_dir ~ '/' ~ artf_file_name }}
       ansible.builtin.file:
         state: absent
         path: "{{ item }}"
       loop:
-        - "{{ download_dir }}/{{ artf_file_name }}"
+        - "{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}"
       # Best effort, as before (the original ignored errors here): a failure is reported below, not hidden.
       register: __oracle_database_patch_role_bundle_removal
       failed_when: false
@@ -123,7 +124,7 @@
     - name: Report a downloaded bundle that could not be removed
       ansible.builtin.debug:
         msg: >-
-          WARNING: could not remove {{ download_dir }}/{{ artf_file_name }}
+          WARNING: could not remove {{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}
           ({{ __oracle_database_patch_role_bundle_removal.results | map(attribute='msg', default='') | select | join('; ') }})
       # failed_when: false clears 'failed'; a removed (or absent) path reports state absent.
       when: __oracle_database_patch_role_bundle_removal.results | map(attribute='state', default='') | reject('equalto', 'absent') | list | length > 0

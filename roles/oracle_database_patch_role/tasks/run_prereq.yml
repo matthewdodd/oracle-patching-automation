@@ -39,9 +39,11 @@
         loop_var: __oracle_database_patch_role_sid
       register: __oracle_database_patch_role_qopiprep
       changed_when: true
+      # The selected Oracle version decides (vars/oracle_versions/<version>.yml qopiprep_fix: 12.1 only, the original
+      # db_ver == "12.1" check), so a new version needs no change here.
       when:
         - ansible_distribution == "AIX"
-        - db_ver == "12.1"
+        - oracle_common_oracle_version.qopiprep_fix | default(false) | bool
 
     - name: Mark the prerequisite progress (status)
       ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility

@@ -1,8 +1,12 @@
 ---
+# Starts (control_command: startup) or stops (shutdown) one database, its listener and its PDB listener.
+# oracle_control_sid.yml includes this role once per database in scope. Each step records the state of the database in
+# oracle_common_progress (roles/oracle_common tasks/progress.yml), so a failure report can say which databases this run
+# left down.
 - name: Standalone Database Control
   block:
     - name: Running DB check
-      debug:
+      ansible.builtin.debug:
         msg:
           - "Server Name: {{ server_name }}"
           - "Database Name : {{ ORACLE_SID }}"
@@ -10,9 +14,12 @@
           - "Time: {{ now(fmt='%Y-%m-%d--%H.%M.%S') }}"
 
     - name: Verify inputs entered
-      fail:
-        msg: "Please check the inputs entered"
-      when: (server_name == "") or (ORACLE_SID == "")
+      ansible.builtin.assert:
+        that:
+          - server_name | default('') | string | length > 0
+          - ORACLE_SID | default('') | string | length > 0
+        fail_msg: "Please check the inputs entered"
+        quiet: true
 
     # The sid_server_dict entry of this database (vars/main.yml: ORACLE_SID, else the SID as given, else the one key
     # that matches without case).
@@ -29,27 +36,38 @@
           nothing is started or stopped for it
         quiet: true
 
-    - set_fact:
-        PDB_NAME: "{{ sid_server_dict[standalone_control_role_sid_key].pdb }}"
+    # PDB_NAME in the original (a fact of this role only).
+    - name: Read the PDB name of {{ ORACLE_SID }}
+      ansible.builtin.set_fact:
+        standalone_control_role_pdb_name: "{{ sid_server_dict[standalone_control_role_sid_key].pdb | default('', true) | string }}"
 
-    - block:
+    # Single-instance hosts may have no VIP: an empty or missing dbvip skips the check (the original ran "ping -c2" with
+    # no address, which always failed and stopped the startup or shutdown).
+    - name: Check the database VIP of {{ ORACLE_SID }}
+      when: __standalone_control_role_vip | length > 0
+      block:
         # No shell: the VIP is a separate argument, so it can never run a command (and one starting with '-' is
         # refused instead of being read as a ping option).
         - name: Check that the database VIP is not an option
           ansible.builtin.assert:
-            that: not ((sid_server_dict[standalone_control_role_sid_key].dbvip | string) is match('\A-'))
+            that: not (__standalone_control_role_vip is match('\A-'))
             fail_msg: "dbvip of {{ ORACLE_SID }} must be a host name or address, not an option"
             quiet: true
 
         - name: Checking if database VIP is pingable
           ansible.builtin.command:
-            argv: [ping, -c2, "{{ sid_server_dict[standalone_control_role_sid_key].dbvip }}"]
-          register: vip_ping_log1
+            argv: [ping, -c2, "{{ __standalone_control_role_vip }}"]
+          register: standalone_control_role_vip_ping
           changed_when: false
 
         - name: Show database VIP ping status
-          debug:
-            msg: "{{ vip_ping_log1.stdout_lines }}"
+          ansible.builtin.debug:
+            msg: "{{ standalone_control_role_vip_ping.stdout_lines }}"
+
+    - name: Report the skipped VIP check of {{ ORACLE_SID }}
+      ansible.builtin.debug:
+        msg: "No dbvip is set for {{ ORACLE_SID }} in sid_server_dict: the VIP ping check is skipped."
+      when: __standalone_control_role_vip | length == 0
 
     # oracle_common_dir_mode (default 0750) and oracle_common_work_group, like the other working directories (recurse
     # dropped: the missing parents are created anyway, and a recursive mode would change the logs inside).
@@ -63,45 +81,78 @@
       become: true
       become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
 
+    - name: Copy the control scripts
+      ansible.builtin.import_tasks: copy_scripts.yml
+
 - name: Startup Database
+  when: control_command == "startup"
   block:
     - name: Rename alert logs
-      import_tasks: rename_logs.yml
+      ansible.builtin.import_tasks: rename_logs.yml
+
+    - name: Record that the database is being started {{ ORACLE_SID }}
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: progress
+      vars:
+        oracle_common_progress_update: {databases: "{{ {__standalone_control_role_progress_sid: 'starting'} }}"}
 
     - name: Import task to start oracle database (and PDB if multitenant)
-      import_tasks: start_database.yml
+      ansible.builtin.import_tasks: start_database.yml
+
+    - name: Record that the database is started {{ ORACLE_SID }}
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: progress
+      vars:
+        oracle_common_progress_update: {databases: "{{ {__standalone_control_role_progress_sid: 'started'} }}"}
 
     - name: Import task to check alert log for errors
-      import_tasks: check_alert_log.yml
+      ansible.builtin.import_tasks: check_alert_log.yml
 
-    - block:
-        - import_tasks: start_listener.yml
-        - import_tasks: check_listener_logs.yml
+    - name: Start the listener and check its logs
+      block:
+        - name: Import the task to start the db listener
+          ansible.builtin.import_tasks: start_listener.yml
 
-    - import_tasks: start_pdb_listener.yml
-      when: PDB_NAME != ""
+        - name: Import the task to check the listener logs
+          ansible.builtin.import_tasks: check_listener_logs.yml
 
-    - name: Playbook completed successfully for {{ORACLE_SID}}
-      debug:
+    - name: Import the task to start the PDB listener
+      ansible.builtin.import_tasks: start_pdb_listener.yml
+      when: standalone_control_role_pdb_name != ""
+
+    - name: Playbook completed successfully for {{ ORACLE_SID }}
+      ansible.builtin.debug:
         msg: "Playbook completed."
 
-  when:
-    - control_command == "startup"
-
 - name: Shutdown Database
+  when: control_command == "shutdown"
   block:
-    - import_tasks: stop_pdb_listener.yml
-      when: PDB_NAME != ""
+    - name: Import the task to shutdown the PDB listener
+      ansible.builtin.import_tasks: stop_pdb_listener.yml
+      when: standalone_control_role_pdb_name != ""
 
     - name: Import the task to shutdown the db listener
-      import_tasks: stop_listener.yml
+      ansible.builtin.import_tasks: stop_listener.yml
+
+    - name: Record that the database is being stopped {{ ORACLE_SID }}
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: progress
+      vars:
+        oracle_common_progress_update: {databases: "{{ {__standalone_control_role_progress_sid: 'stopping'} }}"}
 
     - name: Import task to shutdown oracle database
-      import_tasks: stop_database.yml
+      ansible.builtin.import_tasks: stop_database.yml
+
+    - name: Record that the database is stopped {{ ORACLE_SID }}
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: progress
+      vars:
+        oracle_common_progress_update: {databases: "{{ {__standalone_control_role_progress_sid: 'stopped'} }}"}
 
     - name: Playbook completed successfully
-      debug:
+      ansible.builtin.debug:
         msg: "Shutdown completed."
-
-  when:
-    - control_command == "shutdown"

@@ -1,0 +1,12 @@
+---
+# Records how far this run got on the host, for the failure report (tasks/failure_report.yml). Include variable:
+#   oracle_common_progress_update  dictionary merged (recursively) into oracle_common_progress, e.g.
+#                                  {databases: {ORCL01: stopped}} or {home: patched, datapatch: {ORCL01: done}}
+# oracle_common_progress keys (all optional):
+#   databases  {<SID>: starting | started | stopping | stopped}   (standalone_control_role)
+#   home       patching | patched                                  (oracle_database_patch_role patch_step.yml)
+#   datapatch  {<SID>: running | done}                             (oracle_database_patch_role patch_step.yml)
+- name: Record the progress of this run
+  ansible.builtin.set_fact:
+    oracle_common_progress: >-
+      {{ (oracle_common_progress | default({}, true)) | combine(oracle_common_progress_update | default({}, true), recursive=true) }}

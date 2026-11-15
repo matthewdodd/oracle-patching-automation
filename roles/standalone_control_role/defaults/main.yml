@@ -18,23 +18,39 @@ standalone_control_role_remote_script_directory_base: >-
   {{ remote_script_directory_base | default('/tmp/ora_ansible_scripts_' ~ (DATABASE_NAME | default(''))) }}
 standalone_control_role_remote_output_directory_base: "{{ remote_output_directory_base | default('~/ansiblescripts/startup/log') }}"
 
-# Script file names (roles/standalone_control_role/files/). The names below are the original variable names
-# the tasks use; each can be overridden from the inventory.
-check_mount_script: check_mount.bash
-check_timestamp_script: check_timestamp.bash
-check_alertLog_script: check_alert_log.bash
-check_listenerLogs_script: check_listener_logs.bash
-rename_logs_script: rename_logs.bash
-start_database_script: database_ctl.bash
-start_listener_script: listener_ctl.bash
-start_pdb_script: pdb_ctl.bash
-# pdb_listener_ctl.bash never existed; the PDB listener is started with listener_ctl.bash
-# (see start_pdb_listener.yml). The name is kept as an accepted variable.
-start_pdbListener_script: listener_ctl.bash
-stop_pdb_script: pdb_ctl.bash
-stop_pdbListener_script: listener_ctl.bash
-stop_database_script: database_ctl.bash
-stop_listener_script: listener_ctl.bash
+# Script file names (roles/standalone_control_role/files/). Each original variable name (check_mount_script,
+# check_alertLog_script, start_database_script, ...) is still accepted as an alias and wins when set.
+standalone_control_role_check_mount_script: "{{ check_mount_script | default('check_mount.bash') }}"
+standalone_control_role_check_timestamp_script: "{{ check_timestamp_script | default('check_timestamp.bash') }}"
+standalone_control_role_check_alert_log_script: "{{ check_alertLog_script | default('check_alert_log.bash') }}"
+standalone_control_role_check_listener_logs_script: "{{ check_listenerLogs_script | default('check_listener_logs.bash') }}"
+standalone_control_role_rename_logs_script: "{{ rename_logs_script | default('rename_logs.bash') }}"
+standalone_control_role_start_database_script: "{{ start_database_script | default('database_ctl.bash') }}"
+standalone_control_role_start_listener_script: "{{ start_listener_script | default('listener_ctl.bash') }}"
+standalone_control_role_start_pdb_script: "{{ start_pdb_script | default('pdb_ctl.bash') }}"
+# pdb_listener_ctl.bash never existed; the PDB listener is started with the listener script
+# (standalone_control_role_start_listener_script, see start_pdb_listener.yml). The name is kept as an accepted variable.
+standalone_control_role_start_pdb_listener_script: "{{ start_pdbListener_script | default('listener_ctl.bash') }}"
+standalone_control_role_stop_pdb_script: "{{ stop_pdb_script | default('pdb_ctl.bash') }}"
+standalone_control_role_stop_pdb_listener_script: "{{ stop_pdbListener_script | default('listener_ctl.bash') }}"
+standalone_control_role_stop_database_script: "{{ stop_database_script | default('database_ctl.bash') }}"
+standalone_control_role_stop_listener_script: "{{ stop_listener_script | default('listener_ctl.bash') }}"
+
+# Log file prefix of the alert log check, in <remote_output_directory>: <prefix>.<YYYY.MM.DD>. The original wrote it to
+# log.<check_mount_script> (log.check_mount.bash, a copy-and-paste slip: the alert log check never ran check_mount.bash);
+# it is now named after the alert log check script. Set "log.check_mount.bash" to keep the original file name.
+standalone_control_role_alert_log_check_log: "log.{{ standalone_control_role_check_alert_log_script }}"
+
+# Log checks after a startup. As before, ORA- errors in the alert log, or listener log errors (check_listener_logs
+# exit code 4), are reported as a WARNING and the run goes on; true makes them fail the startup.
+standalone_control_role_fail_on_alert_log_errors: false
+standalone_control_role_fail_on_listener_log_errors: false
+
+# Log rotation before a startup (rename_logs.bash). A missing alert log or listener log directory (exit code 4) used to
+# fail the startup block, leaving a freshly patched database down; it is now a WARNING and the database is started.
+# true restores the original behaviour (the startup fails before the database is started). Any other non-zero exit
+# code still fails.
+standalone_control_role_fail_on_rename_logs_error: false
 
 # After a shutdown, the database must be really down (no ora_pmon_<SID> process left) before anything else runs: the
 # process list is checked up to standalone_control_role_shutdown_verify_retries times,

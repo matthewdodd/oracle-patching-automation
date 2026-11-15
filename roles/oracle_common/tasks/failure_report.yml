@@ -1,0 +1,50 @@
+---
+# Ends a failed stage of the playbooks: sends the notification (best effort, never fatal) and fails the host with a
+# report that says where the run failed and what it left behind, instead of the original bare "Fail". Include variables:
+#   oracle_common_failure_stage          name of the failed stage, e.g. Initialize, Shutdown, Patch (required)
+#   oracle_common_failure_call           notification state (default fail; the prerequisite rescue passes unneeded
+#                                        when the patch is already applied and oracle_common_fail_when_already_applied)
+#   oracle_common_failure_summary_state  notification card (default patching)
+#   oracle_common_failure_cleanup_done   true when the rescue removed this run's script and staging directories
+#                                        (roles/oracle_database_patch_role clean_files_from_server.yml); default false
+# Uses oracle_common_failure when tasks/failure_record.yml already recorded this stage (needed when the rescue runs
+# other tasks first); otherwise records it now. The state comes from oracle_common_progress (tasks/progress.yml):
+# which databases this run stopped or failed to start, whether the Oracle home was patched, and datapatch per database.
+- name: Record the failure
+  ansible.builtin.include_tasks: failure_record.yml
+  when: (oracle_common_failure | default({})).stage | default('') != oracle_common_failure_stage | default('unknown')
+
+- name: Describe the state left behind
+  ansible.builtin.set_fact:
+    oracle_common_failure_state: "{{ __oracle_common_failure_state }}"
+
+- name: Show the state left behind
+  ansible.builtin.debug:
+    msg: "{{ ['State left behind on ' ~ inventory_hostname ~ ':'] + oracle_common_failure_state }}"
+
+# notify.yml already turns every send error into a WARNING; this rescue also covers an error while including or
+# templating it, so the failure below is always reported.
+- name: Send the failure notification
+  block:
+    - name: Send the failure notification (best effort)
+      ansible.builtin.include_tasks: notify.yml
+      vars:
+        call: "{{ oracle_common_failure_call | default('fail') }}"
+        summary_state: "{{ oracle_common_failure_summary_state | default('patching') }}"
+  rescue:
+    - name: Report the notification failure (non-fatal)
+      ansible.builtin.debug:
+        msg: "WARNING: the failure notification was not sent (details hidden: the request carries a secret)"
+
+- name: Fail with the failure report
+  ansible.builtin.fail:
+    msg: >-
+      Fail: {{ oracle_common_failure.stage }} failed on {{ inventory_hostname }} in task '{{ oracle_common_failure.task }}':
+      {{ oracle_common_failure.msg | regex_replace('[.\s]+\Z', '') }}{{ __oracle_common_failure_rc }}.{{ __oracle_common_failure_tail }}
+      State left behind: {{ oracle_common_failure_state | join('; ') }}.
+  vars:
+    __oracle_common_failure_rc: >-
+      {{ (' (exit code ' ~ oracle_common_failure.rc ~ ')') if (oracle_common_failure.rc | default('') | string | length > 0) else '' }}
+    __oracle_common_failure_tail: >-
+      {{ (' Last output: ' ~ (oracle_common_failure.output_tail | join(' | ')) ~ '.')
+         if (oracle_common_failure.output_tail | default([]) | length > 0) else '' }}

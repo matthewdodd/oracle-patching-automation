@@ -111,3 +111,57 @@ __oracle_common_mode_input_names:
 # the group may read, others get nothing; directories (and files that are already executable) keep their execute bit
 # for the owner and the group (X), so OPatch can still traverse the tree and run the patch's own scripts.
 __oracle_common_staging_tree_mode: "u=rwX,g=rX,o="
+
+# Failure report (tasks/failure_report.yml): the state left behind on the host, one sentence per item, from
+# oracle_common_progress (tasks/progress.yml), oracle_common_run and the include variable
+# oracle_common_failure_cleanup_done.
+__oracle_common_failure_state: >-
+  {%- set p = oracle_common_progress | default({}, true) -%}
+  {%- set run = oracle_common_run | default({}, true) -%}
+  {%- set scope = run.scope | default([DATABASE_NAME] if (DATABASE_NAME | default('') | string | length > 0) else [], true) -%}
+  {%- set run_dbs = run.databases | default({}, true) -%}
+  {%- set logs = run_dbs[scope[0]].work_dir if (scope | length > 0 and scope[0] in run_dbs) else '' -%}
+  {%- set dbs = p.databases | default({}, true) -%}
+  {%- set dp = p.datapatch | default({}, true) -%}
+  {%- set home = p.home | default('') -%}
+  {%- set db_text = {'stopped': 'DOWN (stopped by this run)',
+                     'stopping': 'shutdown failed or not verified (it may still be running, or be down)',
+                     'starting': 'startup failed (probably DOWN)',
+                     'started': 'started by this run'} -%}
+  {%- set home_unknown = 'UNKNOWN - the patch step failed or did not finish part-way; check the OPatch output'
+                         ~ ' (opatch_apply_<patch id>.txt) in the working directory before re-running' -%}
+  {%- set removed = 'files: the script and staging directories this run created were removed (a path that could'
+                    ~ ' not be removed is reported as a WARNING above); the logs are kept' -%}
+  {%- set next_step = 'next step: a DBA must check and start the databases left down; a re-run refuses while'
+                      ~ ' DATABASE_NAME is down, and once the databases run again it skips a patch applied in every'
+                      ~ ' database in scope and refuses a scope patched in some databases only' -%}
+  {%- set ns = namespace(out=[], db=[], dp=[]) -%}
+  {%- for sid in scope -%}
+  {%-   set ns.db = ns.db + [sid ~ ' ' ~ db_text.get(dbs[sid] | default(''), 'not stopped by this run')] -%}
+  {%- endfor -%}
+  {%- for sid in dbs if sid not in scope -%}
+  {%-   set ns.db = ns.db + [sid ~ ' ' ~ db_text.get(dbs[sid], dbs[sid])] -%}
+  {%- endfor -%}
+  {%- set ns.out = ns.out + ['databases: ' ~ (ns.db | join(', ') if ns.db | length > 0 else 'none in scope yet')] -%}
+  {%- set ns.out = ns.out + ['Oracle home: ' ~ ('patched by this run' if home == 'patched'
+                                               else (home_unknown if home == 'patching' else 'not changed by this run'))] -%}
+  {%- if home | length > 0 or dp | length > 0 -%}
+  {%-   for sid in scope -%}
+  {%-     set ns.dp = ns.dp + [sid ~ ' ' ~ {'done': 'done', 'running': 'FAILED or unfinished'}.get(dp[sid] | default(''), 'not run')] -%}
+  {%-   endfor -%}
+  {%-   set ns.out = ns.out + ['datapatch: ' ~ ns.dp | join(', ')] -%}
+  {%- endif -%}
+  {%- if oracle_common_failure_cleanup_done | default(false) | bool -%}
+  {%-   set ns.out = ns.out + [removed ~ ((' in ' ~ logs) if logs | length > 0 else '')] -%}
+  {%- elif run | length > 0 -%}
+  {%-   set ns.out = ns.out + ['files: kept for diagnosis - scripts ' ~ (run.script_dir | default('n/a'))
+                               ~ ', staging ' ~ (patch_folder_name | default('n/a'))
+                               ~ ((', logs ' ~ logs) if logs | length > 0 else '')] -%}
+  {%- else -%}
+  {%-   set ns.out = ns.out + ['files: none created on the host by this run'] -%}
+  {%- endif -%}
+  {%- if 'stopped' in (dbs.values() | list) or 'starting' in (dbs.values() | list)
+         or 'stopping' in (dbs.values() | list) or home == 'patching' -%}
+  {%-   set ns.out = ns.out + [next_step] -%}
+  {%- endif -%}
+  {{ ns.out }}

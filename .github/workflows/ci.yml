@@ -33,9 +33,6 @@ jobs:
 
       - name: shellcheck
         if: always()
-        # Informational until the shell-script unit (SH) makes the scripts shellcheck-clean; that unit
-        # removes continue-on-error so this step becomes blocking.
-        continue-on-error: true
         run: shellcheck roles/*/files/*.bash
 
       - name: ansible-playbook --syntax-check (full patch)

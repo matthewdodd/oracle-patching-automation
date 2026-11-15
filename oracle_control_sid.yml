@@ -4,12 +4,14 @@
 # of the run (oracle_common_run.scope: DATABASE_NAME first, then the other databases of its ORACLE_HOME listed in
 # oracle_common_patch_databases; just DATABASE_NAME when included outside a patch run). Each database uses its own
 # listeners (sid_server_dict) and logs into its own working directory. As before, the role receives the SID in lower
-# case (ORACLE_SID) and runs on server_name (target); it also receives the SID as given (standalone_control_role_sid,
-# for the sid_server_dict lookup) and, in a patch run, the environment file of the database (ORA_ENV_FILE).
+# case (ORACLE_SID) and runs on server_name; it also receives the SID as given (standalone_control_role_sid, for the
+# sid_server_dict lookup) and, in a patch run, the environment file of the database (ORA_ENV_FILE).
+# server_name is the current host (inventory_hostname). It used to be the whole target string, so with several targets
+# (target=a,b) every host delegated to the non-existent host "a,b"; with one target it is the same host as before.
 
 - name: Set the control target
   ansible.builtin.set_fact:
-    server_name: "{{ target }}"
+    server_name: "{{ inventory_hostname }}"
     oracle_control_sid_databases: "{{ (oracle_common_run | default({})).scope | default([DATABASE_NAME]) }}"
     # Working (log) directory per database; outside a patch run, DATABASE_NAME uses remote_output_directory.
     oracle_control_sid_work_dirs: >-
@@ -44,8 +46,9 @@
   when: server_name is defined
   block:
     - name: Initiating standalone_control_role for {{ oracle_control_sid_item }}
-      # control_command, ORACLE_SID and remote_output_directory are the role's original input names.
-      ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+      # control_command, ORACLE_SID and remote_output_directory are the role's original public input names (other
+      # playbooks may pass them too), so they cannot carry the role prefix.
+      ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix] - original input names of the role
         name: standalone_control_role
       vars:
         control_command: "{{ control }}"

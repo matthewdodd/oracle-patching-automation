@@ -77,7 +77,12 @@
           - standalone_control_role_time_to_pause | int == 120
           - standalone_control_role_remote_script_directory_base == '/tmp/ora_ansible_scripts_ORCL01'
           - standalone_control_role_remote_output_directory_base == '~/ansiblescripts/startup/log'
-          - check_alertLog_script == 'check_alert_log.bash' and start_pdbListener_script == 'listener_ctl.bash'
+          - standalone_control_role_check_alert_log_script == 'check_alert_log.bash'
+          - standalone_control_role_start_pdb_listener_script == 'listener_ctl.bash'
+          - standalone_control_role_alert_log_check_log == 'log.check_alert_log.bash'
+          - not (standalone_control_role_fail_on_alert_log_errors | bool)
+          - not (standalone_control_role_fail_on_listener_log_errors | bool)
+          - not (standalone_control_role_fail_on_rename_logs_error | bool)
         fail_msg: "a default changed: see the failed assertion above"
         quiet: true
 
@@ -222,6 +227,40 @@
         timeToPause: 30  # noqa: var-naming[pattern] - original input name, kept for compatibility
         remote_script_directory_base: /opt/s
         remote_output_directory_base: /opt/o
+
+    - name: Check the original script name variables of standalone_control_role
+      ansible.builtin.assert:
+        that:
+          - standalone_control_role_check_mount_script == 'a1.bash'
+          - standalone_control_role_check_timestamp_script == 'a2.bash'
+          - standalone_control_role_check_alert_log_script == 'a3.bash'
+          - standalone_control_role_check_listener_logs_script == 'a4.bash'
+          - standalone_control_role_rename_logs_script == 'a5.bash'
+          - standalone_control_role_start_database_script == 'a6.bash'
+          - standalone_control_role_start_listener_script == 'a7.bash'
+          - standalone_control_role_start_pdb_script == 'a8.bash'
+          - standalone_control_role_start_pdb_listener_script == 'a9.bash'
+          - standalone_control_role_stop_pdb_script == 'b1.bash'
+          - standalone_control_role_stop_pdb_listener_script == 'b2.bash'
+          - standalone_control_role_stop_database_script == 'b3.bash'
+          - standalone_control_role_stop_listener_script == 'b4.bash'
+          - standalone_control_role_alert_log_check_log == 'log.a3.bash'
+        fail_msg: "an original script name variable does not feed its standalone_control_role value"
+        quiet: true
+      vars:
+        check_mount_script: a1.bash
+        check_timestamp_script: a2.bash
+        check_alertLog_script: a3.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        check_listenerLogs_script: a4.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        rename_logs_script: a5.bash
+        start_database_script: a6.bash
+        start_listener_script: a7.bash
+        start_pdb_script: a8.bash
+        start_pdbListener_script: a9.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        stop_pdb_script: b1.bash
+        stop_pdbListener_script: b2.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        stop_database_script: b3.bash
+        stop_listener_script: b4.bash
 
     - name: Accept valid inputs given through the original names
       ansible.builtin.include_tasks: tasks/alias_validation_case.yml
