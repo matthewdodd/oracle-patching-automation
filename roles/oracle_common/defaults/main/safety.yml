@@ -291,6 +291,8 @@ __oracle_common_run_script_env: >-
 #   __oracle_common_shared_home_inventory         text printed by home_inventory.bash (one line per database)
 #   __oracle_common_shared_home_inventory_errors  list of messages for home_inventory.bash runs that failed
 #   __oracle_common_shared_home_homes             dict ORACLE_SID -> resolved ORACLE_HOME, for the databases in scope
+#   __oracle_common_shared_home_env_errors        dict ORACLE_SID -> why its environment file was refused or not read
+#                                                 (not a regular file, world-writable, another owner, no ORACLE_HOME)
 #   __oracle_common_shared_home_scope             databases in scope (DATABASE_NAME first)
 #   __oracle_common_shared_home_primary           DATABASE_NAME
 #   __oracle_common_shared_home_report_only       true: report instead of refusing (the prerequisite playbook)
@@ -317,8 +319,11 @@ __oracle_common_home_out_of_scope_stopped: >-
   {{ __oracle_common_home_out_of_scope | reject('in', __oracle_common_home_running_sids) | list }}
 __oracle_common_shared_home_primary_home: >-
   {{ (__oracle_common_shared_home_homes | default({}))[__oracle_common_shared_home_primary | default('')] | default('') }}
+__oracle_common_shared_home_env_refused: >-
+  {{ (__oracle_common_shared_home_env_errors | default({})).keys() | list | select('in', __oracle_common_shared_home_scope | default([])) | list }}
 __oracle_common_shared_home_unresolved: >-
-  {{ __oracle_common_shared_home_scope | default([]) | reject('in', __oracle_common_shared_home_homes | default({})) | list }}
+  {{ __oracle_common_shared_home_scope | default([]) | reject('in', __oracle_common_shared_home_homes | default({}))
+     | reject('in', __oracle_common_shared_home_env_refused) | list }}
 __oracle_common_shared_home_mismatched: >-
   {{ __oracle_common_shared_home_homes | default({}) | dict2items
      | selectattr('key', 'in', __oracle_common_shared_home_scope | default([]))
@@ -332,6 +337,14 @@ __oracle_common_shared_home_is_report_only: >-
 # Each finding has a kind: input (a scope error: always refused), detect (the home could not be listed reliably),
 # running / stopped (databases on the home that are not in scope).
 __oracle_common_shared_home_findings:
+  - kind: input
+    failed: "{{ __oracle_common_shared_home_env_refused | length > 0 }}"
+    msg: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for sid in __oracle_common_shared_home_env_refused -%}
+      {%-   set ns.out = ns.out + ['the ORACLE_HOME of ' ~ sid ~ ' could not be read: ' ~ __oracle_common_shared_home_env_errors[sid]] -%}
+      {%- endfor -%}
+      {{ ns.out | join('; ') }}
   - kind: input
     failed: "{{ __oracle_common_shared_home_unresolved | length > 0 }}"
     msg: >-
@@ -356,7 +369,8 @@ __oracle_common_shared_home_findings:
   - kind: detect
     failed: >-
       {{ (__oracle_common_shared_home_inventory_errors | default([]) | length == 0)
-         and (__oracle_common_shared_home_unresolved | length == 0) and not __oracle_common_shared_home_primary_listed }}
+         and (__oracle_common_shared_home_unresolved | length == 0) and (__oracle_common_shared_home_env_refused | length == 0)
+         and not __oracle_common_shared_home_primary_listed }}
     msg: >-
       the list of databases that use {{ __oracle_common_shared_home_primary_home }} does not include
       {{ __oracle_common_shared_home_primary | default('') }} itself, so it cannot be trusted (check oratab

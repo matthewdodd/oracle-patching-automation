@@ -12,6 +12,10 @@
 # 2. tasks/shared_home_decide.yml itself refuses (fails) or accepts.
 # 3. tasks/shared_home.yml end to end: environment files are sourced for ORACLE_HOME, a stub home_inventory.bash (it
 #    prints the file named by ORA_ORATAB and logs its argument) lists the home, and the run is refused or accepted.
+#    Environment files are checked before they are sourced: a world-writable file of a second database is refused and
+#    never sourced (even with oracle_common_env_file_allow_any_owner and in report-only mode), a symbolic link is
+#    refused, and a file of another owner (simulated through a bash wrapper) is refused by default and accepted with
+#    oracle_common_env_file_allow_any_owner.
 - name: Shared ORACLE_HOME detection regression test
   hosts: localhost
   connection: local
@@ -93,6 +97,28 @@
         homes: {ORCL01: "{{ home1 }}"}
         refused: true
         refusals: ["the ORACLE_HOME of ORCL02 could not be read"]
+      - name: a database in scope whose environment file was refused (world-writable)
+        inventory: "ORCL01\trunning\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}"}
+        env_errors: {ORCL02: "environment file /local/ORCL02.env is world-writable; refused always, not sourced"}
+        refused: true
+        refusals: ["the ORACLE_HOME of ORCL02 could not be read: environment file /local/ORCL02.env is world-writable"]
+      - name: a database in scope whose environment file was refused, report-only
+        inventory: "ORCL01\trunning\toratab\n"
+        scope: [ORCL01, ORCL02]
+        homes: {ORCL01: "{{ home1 }}"}
+        env_errors: {ORCL02: "environment file /local/ORCL02.env is owned by another account"}
+        report_only: true
+        refused: true
+        refusals: ["the ORACLE_HOME of ORCL02 could not be read: environment file /local/ORCL02.env is owned by another account"]
+      - name: DATABASE_NAME whose environment file was refused
+        inventory: ""
+        scope: [ORCL01]
+        homes: {}
+        env_errors: {ORCL01: "environment file /local/ORCL01.env is world-writable; refused always, not sourced"}
+        refused: true
+        refusals: ["the ORACLE_HOME of ORCL01 could not be read: environment file /local/ORCL01.env is world-writable"]
       - name: malformed listing
         inventory: "ORCL01\trunning\toratab\nORCL02 running oratab\n"
         scope: [ORCL01]
@@ -163,6 +189,8 @@
           - item.warnings | default([]) | reject('in', __oracle_common_shared_home_warnings | join('\n')) | list | length == 0
           - (item.warnings is defined) or (item.refused) or (__oracle_common_shared_home_warnings | length == 0)
           - item.out_of_scope is not defined or (__oracle_common_home_out_of_scope | sort) == (item.out_of_scope | sort)
+          # A refused environment file is reported once, as such, not also as an unreadable home or a bad listing.
+          - item.env_errors is not defined or (__oracle_common_shared_home_refusals | length == 1)
         fail_msg: >-
           case '{{ item.name }}': refused={{ __oracle_common_shared_home_refusals | length > 0 }} (expected {{ item.refused }});
           refusals: {{ __oracle_common_shared_home_refusals }}; warnings: {{ __oracle_common_shared_home_warnings }};
@@ -172,6 +200,7 @@
         __oracle_common_shared_home_inventory: "{{ item.inventory }}"
         __oracle_common_shared_home_inventory_errors: "{{ item.errors | default([]) }}"
         __oracle_common_shared_home_homes: "{{ item.homes }}"
+        __oracle_common_shared_home_env_errors: "{{ item.env_errors | default({}) }}"
         __oracle_common_shared_home_scope: "{{ item.scope }}"
         __oracle_common_shared_home_primary: "{{ item.scope | first }}"
         __oracle_common_shared_home_report_only: "{{ item.report_only | default(false) }}"
@@ -287,6 +316,9 @@
                 ORCL02: {env_file: "{{ shared_home_tmp.path }}/env/ORCL02.env", dbowner: oracle}
                 ORCL03: {env_file: "{{ shared_home_tmp.path }}/env/ORCL03.env", dbowner: oracle}
                 ORCL04: {env_file: "{{ shared_home_tmp.path }}/env/ORCL04.env", dbowner: oracle}
+                ORCL05: {env_file: "{{ shared_home_tmp.path }}/env/ORCL05.env", dbowner: oracle}
+                ORCL06: {env_file: "{{ shared_home_tmp.path }}/env/ORCL06.env", dbowner: oracle}
+                ORCL07: {env_file: "{{ shared_home_tmp.path }}/env/ORCL07.env", dbowner: oracle}
 
         # E2E 1: ORCL01 and ORCL02 share home1, both in scope: accepted.
         - name: Stub the listing of home1 (both databases running)
@@ -396,6 +428,179 @@
                 that:
                   - "'the ORACLE_HOME of ORCL04 could not be read' in ansible_failed_result.msg | default('')"
                 fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        # E2E 4b-4e: environment files are checked with the rules of the scripts before they are sourced. Each test file
+        # touches a marker when sourced, so a refused file is proven never to have run.
+        - name: Create the environment files to be checked (ORCL05 world-writable, ORCL06 of another owner)
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/env/{{ item.sid }}.env"
+            mode: "{{ item.mode }}"
+            content: |
+              touch "{{ shared_home_tmp.path }}/sourced_{{ item.sid }}"
+              export ORACLE_HOME={{ shared_home_tmp.path }}/home1
+          loop:
+            - {sid: ORCL05, mode: "0666"}
+            - {sid: ORCL06, mode: "0600"}
+
+        - name: Create ORCL07.env as a symbolic link to ORCL02.env
+          ansible.builtin.file:
+            src: "{{ shared_home_tmp.path }}/env/ORCL02.env"
+            dest: "{{ shared_home_tmp.path }}/env/ORCL07.env"
+            state: link
+
+        # Another owner cannot be created without root: a bash wrapper (oracle_common_bash_path) loads, through BASH_ENV,
+        # overrides that make ORCL06.env look owned by another account ([ -O ] false, find -user 0 empty); every other
+        # file is checked for real.
+        - name: Create the bash wrapper that simulates another owner of ORCL06.env
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/{{ item.name }}"
+            mode: "0700"
+            content: "{{ item.content }}"
+          loop:
+            - name: foreign_owner.bashrc
+              content: |
+                __f='{{ shared_home_tmp.path }}/env/ORCL06.env'
+                [() {
+                  if [[ $1 == -O && $2 == "$__f" ]]; then return 1; fi
+                  if [[ $1 == '!' && $2 == -O && $3 == "$__f" ]]; then return 0; fi
+                  builtin [ "$@"
+                }
+                find() {
+                  if [[ $1 == "$__f" && $3 == -user ]]; then return 0; fi
+                  command find "$@"
+                }
+            - name: foreign_owner_bash
+              content: |
+                #!/bin/bash
+                BASH_ENV='{{ shared_home_tmp.path }}/foreign_owner.bashrc'
+                export BASH_ENV
+                exec /bin/bash "$@"
+
+        - name: Stub the listing of home1 (ORCL01 and ORCL02 running) and use the wrapper
+          ansible.builtin.copy:
+            dest: "{{ shared_home_tmp.path }}/oratab"
+            mode: "0600"
+            content: "{{ listing_both_running }}"
+
+        # E2E 4b: ORCL05.env is world-writable: refused (even report-only), never sourced.
+        - name: Refuse a world-writable environment file of a second database (end to end, report-only)
+          block:
+            - name: Set the scope (ORCL01, ORCL02, ORCL05)
+              ansible.builtin.set_fact:
+                oracle_common_bash_path: "{{ shared_home_tmp.path }}/foreign_owner_bash"
+                __oracle_common_shared_home_report_only: true
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02', 'ORCL05']}) }}"
+            - name: Run tasks/shared_home.yml (world-writable environment file, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted a world-writable environment file"
+          rescue:
+            - name: Look for the marker of ORCL05.env
+              ansible.builtin.stat:
+                path: "{{ shared_home_tmp.path }}/sourced_ORCL05"
+              register: shared_home_marker05
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'the ORACLE_HOME of ORCL05 could not be read: environment file ' ~ shared_home_tmp.path ~ '/env/ORCL05.env is world-writable'
+                     in ansible_failed_result.msg | default('')"
+                  - not shared_home_marker05.stat.exists
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / marker {{ shared_home_marker05.stat.exists }}"
+
+        # E2E 4c: world-writable stays refused with oracle_common_env_file_allow_any_owner.
+        - name: Refuse a world-writable environment file even with the owner opt-in (end to end)
+          block:
+            - name: Set the scope (ORCL01, ORCL02, ORCL05) and the opt-in
+              ansible.builtin.set_fact:
+                __oracle_common_shared_home_report_only: false
+                oracle_common_env_file_allow_any_owner: true
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02', 'ORCL05']}) }}"
+            - name: Run tasks/shared_home.yml (world-writable environment file with the opt-in, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted a world-writable environment file with oracle_common_env_file_allow_any_owner"
+          rescue:
+            - name: Look for the marker of ORCL05.env
+              ansible.builtin.stat:
+                path: "{{ shared_home_tmp.path }}/sourced_ORCL05"
+              register: shared_home_marker05
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'ORCL05.env is world-writable' in ansible_failed_result.msg | default('')"
+                  - not shared_home_marker05.stat.exists
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / marker {{ shared_home_marker05.stat.exists }}"
+
+        # E2E 4d: ORCL06.env (another owner) refused by default, never sourced; ORCL07.env (symbolic link) refused.
+        - name: Refuse an environment file of another owner by default (end to end)
+          block:
+            - name: Set the scope (ORCL01, ORCL02, ORCL06, ORCL07) without the opt-in
+              ansible.builtin.set_fact:
+                oracle_common_env_file_allow_any_owner: false
+                oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+                oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02', 'ORCL06', 'ORCL07']}) }}"
+            - name: Run tasks/shared_home.yml (environment file of another owner, must refuse)
+              ansible.builtin.include_tasks: tasks/oracle_common.yml
+              vars:
+                test_tasks_from: shared_home
+            - name: Fail the test (the refusal did not happen)
+              ansible.builtin.fail:
+                msg: "shared_home.yml accepted an environment file of another owner without the opt-in"
+          rescue:
+            - name: Look for the marker of ORCL06.env
+              ansible.builtin.stat:
+                path: "{{ shared_home_tmp.path }}/sourced_ORCL06"
+              register: shared_home_marker06
+            - name: Check the refusal (end to end)
+              ansible.builtin.assert:
+                that:
+                  - "'the ORACLE_HOME of ORCL06 could not be read: environment file ' ~ shared_home_tmp.path ~ '/env/ORCL06.env is owned by another account'
+                     in ansible_failed_result.msg | default('')"
+                  - "'oracle_common_env_file_allow_any_owner=true' in ansible_failed_result.msg | default('')"
+                  - "'the ORACLE_HOME of ORCL07 could not be read: environment file ' ~ shared_home_tmp.path ~ '/env/ORCL07.env is missing, not a regular file'
+                     in ansible_failed_result.msg | default('')"
+                  - "'ORCL01' not in (__oracle_common_shared_home_lookup_errors | default({}))"
+                  - "'ORCL02' not in (__oracle_common_shared_home_lookup_errors | default({}))"
+                  - not shared_home_marker06.stat.exists
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }} / marker {{ shared_home_marker06.stat.exists }}"
+
+        # E2E 4e: the same file is accepted (and sourced) with oracle_common_env_file_allow_any_owner.
+        - name: Set the scope (ORCL01, ORCL02, ORCL06) with the opt-in
+          ansible.builtin.set_fact:
+            oracle_common_env_file_allow_any_owner: true
+            oracle_common_shared_home: {refusals: [__e2e_not_run__]}
+            oracle_common_run: "{{ shared_home_e2e_run | combine({'scope': ['ORCL01', 'ORCL02', 'ORCL06']}) }}"
+
+        - name: Run tasks/shared_home.yml (environment file of another owner with the opt-in)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: shared_home
+
+        - name: Look for the marker of ORCL06.env
+          ansible.builtin.stat:
+            path: "{{ shared_home_tmp.path }}/sourced_ORCL06"
+          register: shared_home_marker06
+
+        - name: Check the acceptance with the opt-in (end to end)
+          ansible.builtin.assert:
+            that:
+              - oracle_common_shared_home.refusals == []
+              - __oracle_common_shared_home_lookups.ORCL06.raw == shared_home_tmp.path ~ '/home1'
+              - shared_home_marker06.stat.exists
+            fail_msg: "unexpected: {{ oracle_common_shared_home }} / lookups {{ __oracle_common_shared_home_lookups }}"
+
+        - name: Restore the end-to-end inputs (no wrapper, no opt-in)
+          ansible.builtin.set_fact:
+            oracle_common_bash_path: /bin/bash
+            oracle_common_env_file_allow_any_owner: false
 
         # E2E 5: home_inventory.bash fails: refused; report-only: accepted with a warning.
         - name: Make the stub home_inventory.bash fail

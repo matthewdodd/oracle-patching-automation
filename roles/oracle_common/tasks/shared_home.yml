@@ -3,7 +3,10 @@
 # before anything is stopped or the home is changed. Owner decision: detect a home shared by several databases and
 # refuse unless every database that uses it is in scope of the run (oracle_common_patch_databases).
 #   1. Read the ORACLE_HOME of every database in scope from its environment file (read-only; as the database owner,
-#      the same way the scripts source it).
+#      the same way the scripts source it). The file is checked first with the rules of the bundled scripts and is
+#      never sourced when refused: not a regular file (a symbolic link included) or not readable (exit 3), world-writable
+#      (exit 5, always refused), or owned by another account than the database owner or root (exit 6, accepted only with
+#      oracle_common_env_file_allow_any_owner). A refusal is a scope error: tasks/shared_home_decide.yml refuses the run.
 #   2. List every database that uses the ORACLE_HOME of DATABASE_NAME with home_inventory.bash (read-only: oratab,
 #      running ora_pmon_<SID> processes of that home, environment files). It runs for the path as written in the
 #      environment file and, when it differs, for the physical path (symbolic links resolved).
@@ -15,12 +18,21 @@
     argv:
       - "{{ oracle_common_bash_path }}"
       - -c
-      # Static script; the environment file is passed as $1, never interpolated into the script.
+      # Static script; the environment file is $1 and the owner opt-in ("true" or "false") is $2, never interpolated
+      # into the script. Portable checks (bash on Linux and AIX): test -f/-L/-r/-O and find -prune -perm/-user.
       - >-
-        [ -r "$1" ] || exit 3; . "$1" >/dev/null 2>&1 </dev/null; h="${ORACLE_HOME:-}"; [ -n "$h" ] || exit 4;
+        f=$1; any=${2:-false};
+        if [ ! -f "$f" ] || [ -L "$f" ] || [ ! -r "$f" ]; then
+        echo "environment file is missing, not a regular file (symbolic links are refused) or not readable: $f" >&2; exit 3; fi;
+        ww=$(find "$f" -prune -perm -0002 -print) || { echo "cannot check the permissions of the environment file: $f" >&2; exit 7; };
+        if [ -n "$ww" ]; then echo "environment file is world-writable, refusing to source it: $f" >&2; exit 5; fi;
+        if [ "$any" != true ] && [ ! -O "$f" ] && [ -z "$(find "$f" -prune -user 0 -print 2>/dev/null)" ]; then
+        echo "environment file is owned by another user, refusing to source it: $f" >&2; exit 6; fi;
+        . "$f" >/dev/null 2>&1 </dev/null; h="${ORACLE_HOME:-}"; [ -n "$h" ] || exit 4;
         printf 'raw=%s\n' "$h"; p=$(cd "$h" 2>/dev/null && pwd -P) && printf 'physical=%s\n' "$p"; exit 0
       - oracle_home_lookup
       - "{{ oracle_common_run.databases[__oracle_common_sid].env_file }}"
+      - "{{ 'true' if (__oracle_common_env_file_allow_any_owner | bool) else 'false' }}"
     expand_argument_vars: false
   become: true
   become_user: "{{ oracle_common_run.databases[__oracle_common_sid].dbowner }}"
@@ -48,10 +60,29 @@
       {%-   endif -%}
       {%- endfor -%}
       {{ ns.out }}
+    # ORACLE_SID -> why its environment file was not read (every lookup that did not exit 0).
+    __oracle_common_shared_home_lookup_errors: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for r in __oracle_common_home_lookup.results if r.rc | default(1) != 0 -%}
+      {%-   set f = oracle_common_run.databases[r['__oracle_common_sid']].env_file -%}
+      {%-   set reason = __oracle_common_lookup_reasons[r.rc | default(-1) | string]
+                         | default('the lookup failed (rc ' ~ (r.rc | default('unknown')) ~ '): '
+                                   ~ (r.stderr_lines | default([]) | last | default(r.msg | default('')))) -%}
+      {%-   set ns.out = ns.out | combine({r['__oracle_common_sid']: 'environment file ' ~ f ~ ' ' ~ reason}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
   vars:
     __oracle_common_re_raw_home: '(?m)^raw=(.*?)\s*$'
     __oracle_common_re_physical_home: '(?m)^physical=(.*?)\s*$'
     __oracle_common_re_trailing_slashes: '(?<=.)/+\Z'
+    __oracle_common_lookup_reasons:
+      "3": "is missing, not a regular file (symbolic links are refused) or not readable by the database owner; not sourced"
+      "4": "does not set ORACLE_HOME"
+      "5": "is world-writable; refused always, not sourced"
+      "6": >-
+        is owned by another account than the database owner or root; not sourced (set
+        oracle_common_env_file_allow_any_owner=true, alias oracle_patch_env_file_allow_any_owner, to accept it knowingly)
+      "7": "could not be checked (find failed); not sourced"
 
 - name: Show the ORACLE_HOME of each database in scope
   ansible.builtin.debug:
@@ -61,7 +92,8 @@
                                        if __oracle_common_shared_home_lookups[__oracle_common_sid].home
                                           != __oracle_common_shared_home_lookups[__oracle_common_sid].raw else ''))
                                    if __oracle_common_sid in __oracle_common_shared_home_lookups
-                                   else 'ORACLE_HOME not found in ' ~ oracle_common_run.databases[__oracle_common_sid].env_file }}
+                                   else (__oracle_common_shared_home_lookup_errors[__oracle_common_sid]
+                                         | default('ORACLE_HOME not found in ' ~ oracle_common_run.databases[__oracle_common_sid].env_file)) }}
   loop: "{{ oracle_common_run.scope }}"
   loop_control:
     loop_var: __oracle_common_sid
@@ -102,6 +134,7 @@
     __oracle_common_shared_home_homes: >-
       {{ dict(__oracle_common_shared_home_lookups.keys() | list
               | zip(__oracle_common_shared_home_lookups.values() | map(attribute='home') | list)) }}
+    __oracle_common_shared_home_env_errors: "{{ __oracle_common_shared_home_lookup_errors }}"
     __oracle_common_shared_home_scope: "{{ oracle_common_run.scope }}"
     __oracle_common_shared_home_primary: "{{ oracle_common_run.primary }}"
     __oracle_common_newline: "\n"

@@ -306,7 +306,7 @@ group- or world-writable modes are rejected. 0777 is not allowed anywhere (no to
 | `oracle_common_oratab` | `/etc/oratab` | Alias `oracle_patch_oratab` (`ORA_ORATAB`). |
 | `oracle_common_env_glob` | `<env dir>/*.env` | Environment files read for their ORACLE_HOME (`ORA_ENV_GLOB`). |
 | `oracle_common_bash_path` | `/usr/bin/bash` | Shell that reads ORACLE_HOME from an environment file. |
-| `oracle_common_env_file_allow_any_owner` | `false` | Alias `oracle_patch_env_file_allow_any_owner` (`true` / `false`, also as strings). Opt-in: the scripts also source a `<SID>.env` owned by another account than the database owner or root (`ORA_ENV_FILE_ALLOW_ANY_OWNER=true` for the patch, version and start/stop scripts); a world-writable file is always refused. |
+| `oracle_common_env_file_allow_any_owner` | `false` | Alias `oracle_patch_env_file_allow_any_owner` (`true` / `false`, also as strings). Opt-in: the scripts and the shared ORACLE_HOME check also source a `<SID>.env` owned by another account than the database owner or root (`ORA_ENV_FILE_ALLOW_ANY_OWNER=true` for the patch, version and start/stop scripts); a world-writable file is always refused. |
 | `oracle_common_fail_when_already_applied` | `false` | Alias `oracle_patch_fail_when_already_applied`. See [Patch already applied](#patch-already-applied). |
 | `oracle_common_unique_work_dirs` | `true` | Alias `oracle_patch_unique_work_dirs`. See [Working directories](#working-directories-and-cleanup). |
 | `oracle_common_run_id` | generated | Alias `oracle_patch_run_id`. `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`; default `<AAP job id>_<UTC time>_<8 hex>`. |
@@ -553,7 +553,7 @@ message. A failed check sends the red card and stops the run before any host is 
 | Modes | scripts 0750, directories 0750, bundle 0640, extracted tree `u=rwX,g=rX,o=` | Group/world-writable modes rejected; 0777 removed (no toggle). |
 | Working directories | private base under the Oracle base, per run | `/tmp` only when set explicitly (warning). |
 | Inputs | anchored `\A..\Z` patterns, `..` path components rejected, `"<CHANGE_ME>"` rejected | |
-| Environment files | sourced only when owned by the user running the script (the database owner) or root and not world-writable; an empty, `.` or relative PATH entry is dropped after sourcing | `oracle_common_env_file_allow_any_owner: true` (alias `oracle_patch_env_file_allow_any_owner`) accepts another owner; a world-writable file is always refused. |
+| Environment files | sourced only when owned by the user running the script (the database owner) or root and not world-writable, by the scripts and by the playbook's own ORACLE_HOME lookup for every database in scope (which also refuses a symbolic link) before anything is stopped; an empty, `.` or relative PATH entry is dropped after sourcing | `oracle_common_env_file_allow_any_owner: true` (alias `oracle_patch_env_file_allow_any_owner`) accepts another owner; a world-writable file is always refused. |
 
 ## AAP usage and migrating existing job templates
 
@@ -611,7 +611,7 @@ were kept or removed. A failed patch step leaves the databases down and the stag
 | Repository folder mismatch | The URL names another release; fix `oracle_common_patch_repo_url` or set `oracle_common_patch_repo_version_check: false` for a repository not organised by release. |
 | Download fails | The message gives the HTTP status (URL and credentials removed). Internal CA: `oracle_common_patch_ca_path`. |
 | `Permission denied` / `Failed to set permissions` when becoming the database owner | Install `acl` on Linux, set `ansible_common_remote_group`, or connect as root (`ansible.cfg`). |
-| `environment file is owned by another user` / `is world-writable` | The `<SID>.env` file must belong to the database owner or root and not be world-writable; fix its ownership and mode. |
+| `environment file is owned by another user` (`another account`) / `is world-writable` | The `<SID>.env` file must belong to the database owner or root and not be world-writable; fix its ownership and mode. |
 | Host key verification failed | Add the target's key to known_hosts (verify the fingerprint out of band). |
 | ServiceNow `required, from the Ansible Vault` | Create the environment's `vault.yml` and pass `--vault-id <env>@prompt` (AAP: attach the Vault credential). |
 | No Teams card | The webhook is empty or not https (the run shows why), or the post failed (WARNING). A webhook still holding `"<CHANGE_ME>"` does not just skip the card: input validation on the targets refuses the run (`oracle_common_notify_webhook_url: still the placeholder`); replace it or delete `vault_teams_webhook_url`. |
