@@ -1,0 +1,181 @@
+---
+# Prepares the containers like a running database host before the playbook runs (every scenario's molecule.yml points
+# provisioner.playbooks.prepare here). Test fixture only: everything created here (users, CA, repository, Oracle homes,
+# databases) is fake, and the inputs come from the scenario's inventory (molecule.yml):
+#   molecule_homes        fake ORACLE_HOMEs (tasks/fake_home.yml)
+#   molecule_databases    fake databases, started with their listeners (tasks/fake_database.yml)
+#   molecule_repository   the https artifact repository inside the container (address, port, directory, ...)
+#   molecule_bundle_file  the patch bundle file name the playbook derives (<LINUX>_<cycle><year>.tar.gz)
+#   molecule_patch        patch numbers and OPatch versions of the fake bundle
+- name: Prepare the database hosts
+  hosts: molecule_oracle
+  vars:
+    molecule_shared_dir: "{{ playbook_dir }}"
+  tasks:
+    # The role's own per-OS list (single source of truth), so the playbook's prerequisite package check runs with its
+    # production default and passes. dnf runs as a command: on release 8 the Python that Ansible uses (3.11) has no dnf
+    # bindings, and the platform Python (3.6) is too old for ansible-core 2.22.
+    - name: Load the prerequisite package list of this release
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../roles/oracle_common/vars/RedHat-{{ ansible_facts['distribution_major_version'] }}.yml"
+        name: molecule_os_vars
+
+    - name: Install the Oracle prerequisite packages
+      ansible.builtin.command:
+        argv: "{{ ['dnf', '--assumeyes', '--setopt=install_weak_deps=False', 'install'] + molecule_os_vars['__oracle_common_prereq_packages'] }}"
+      register: molecule_prereq_install
+      changed_when: "'Nothing to do' not in molecule_prereq_install.stdout"
+
+    # --- OS users and groups (normally provided by the site build) ----------------------------------------------
+    - name: Create the Oracle groups
+      ansible.builtin.group:
+        name: "{{ item.name }}"
+        gid: "{{ item.gid | default(omit) }}"
+      loop:
+        - {name: oinstall, gid: 54321}
+        - {name: dba, gid: 54322}
+        # The group the playbook adds the database owner to (oracle_common_group_name / GROUP_NAME; it must exist).
+        - {name: "{{ molecule_automation_group }}"}
+
+    - name: Create the Oracle software owner
+      ansible.builtin.user:
+        name: oracle
+        uid: 54321
+        group: oinstall
+        groups: [dba]
+        shell: /bin/bash
+
+    - name: Create the site directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+        mode: "{{ item.mode | default('0755') }}"
+      loop:
+        # Environment files (oracle_common_env_dir).
+        - {path: "{{ molecule_env_dir }}"}
+        - {path: /u01}
+        # ORACLE_BASE, owned by the software owner: the playbook creates its working and staging directories below it.
+        - {path: "{{ molecule_oracle_base }}", owner: oracle, group: oinstall}
+        # Stub state (files/stubs/*), outside the Oracle homes.
+        - {path: "{{ molecule_oracle_base }}/molecule_state", owner: oracle, group: oinstall, mode: "0750"}
+        - {path: "{{ molecule_oracle_base }}/molecule_state/listeners", owner: oracle, group: oinstall, mode: "0750"}
+
+    - name: Create oratab
+      ansible.builtin.file:
+        path: /etc/oratab
+        state: touch
+        owner: oracle
+        group: oinstall
+        mode: "0644"
+        modification_time: preserve
+        access_time: preserve
+
+    # --- https artifact repository (inside the container, on its loopback interface) ------------------------------
+    - name: Copy the fixture scripts
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /root/molecule_fixture/
+        mode: "0755"
+      loop:
+        - "{{ molecule_shared_dir }}/files/stubs"
+        - "{{ molecule_shared_dir }}/files/build_patch_bundle.bash"
+        - "{{ molecule_shared_dir }}/files/make_test_tls.bash"
+        - "{{ molecule_shared_dir }}/files/https_repository.py"
+
+    - name: Create the test certificate authority and the repository certificate
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - /root/molecule_fixture/make_test_tls.bash
+          - "{{ molecule_repository.tls_dir }}"
+          - "{{ molecule_repository.address }}"
+        creates: "{{ molecule_repository.tls_dir }}/server.crt"
+
+    # The playbook's download keeps its secure defaults (TLS certificate verified, https only): the test CA is trusted
+    # the way a site CA would be, through the system trust store.
+    - name: Trust the test certificate authority
+      ansible.builtin.copy:
+        src: "{{ molecule_repository.tls_dir }}/ca.crt"
+        remote_src: true
+        dest: /etc/pki/ca-trust/source/anchors/molecule-test-ca.crt
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Update the system trust store
+
+    - name: Update the system trust store now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Build the stub patch bundle
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - /root/molecule_fixture/build_patch_bundle.bash
+          - /root/molecule_fixture/stubs
+          - "{{ molecule_repository.dir }}/oracledatabase"
+          - "{{ molecule_repository.release }}"
+          - "{{ molecule_bundle_file }}"
+          - "{{ molecule_patch.ru_id }}"
+          - "{{ molecule_patch.ojvm_id }}"
+          - "{{ molecule_patch.new_opatch_version }}"
+        creates: "{{ molecule_repository.dir }}/oracledatabase/{{ molecule_repository.release }}/{{ molecule_bundle_file }}.sha256"
+
+    - name: Check whether the repository is already served
+      ansible.builtin.wait_for:
+        host: "{{ molecule_repository.address }}"
+        port: "{{ molecule_repository.port }}"
+        timeout: 1
+      register: molecule_repository_listening
+      failed_when: false
+
+    # Background https server (lives until the container is destroyed or the async limit is reached, far longer than a
+    # test run).
+    - name: Serve the repository over https
+      # wait_for reports state=started only when the port answered.
+      when: molecule_repository_listening.state | default('') != 'started'
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_facts['python']['executable'] }}"
+          - /root/molecule_fixture/https_repository.py
+          - "{{ molecule_repository.dir }}"
+          - "{{ molecule_repository.address }}"
+          - "{{ molecule_repository.port | string }}"
+          - "{{ molecule_repository.tls_dir }}/server.crt"
+          - "{{ molecule_repository.tls_dir }}/server.key"
+          - "{{ molecule_repository.access_log }}"
+      async: 14400
+      poll: 0
+      changed_when: true
+
+    # Certificate verified against the system trust store, like the playbook's download.
+    - name: Wait for the repository (TLS verified)
+      ansible.builtin.uri:
+        url: "{{ molecule_repository_release_url }}/{{ molecule_bundle_file }}.sha256"
+        return_content: true
+        validate_certs: true
+      register: molecule_repository_check
+      until: molecule_repository_check.status | default(0) == 200
+      retries: 15
+      delay: 2
+
+    # --- Oracle homes and databases -----------------------------------------------------------------------------
+    - name: Create the fake Oracle homes
+      ansible.builtin.include_tasks: tasks/fake_home.yml
+      loop: "{{ molecule_homes }}"
+      loop_control:
+        loop_var: molecule_home
+
+    - name: Create and start the fake databases
+      ansible.builtin.include_tasks: tasks/fake_database.yml
+      loop: "{{ molecule_databases }}"
+      loop_control:
+        loop_var: molecule_db
+        label: "{{ molecule_db.sid }}"
+
+  handlers:
+    - name: Update the system trust store
+      ansible.builtin.command:
+        argv: [update-ca-trust, extract]
+      changed_when: true

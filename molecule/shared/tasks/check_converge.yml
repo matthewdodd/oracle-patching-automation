@@ -1,0 +1,19 @@
+---
+# Checks the result of converge on a host: every Oracle home (molecule_expected_homes), every database
+# (molecule_databases: patched, or left alone), and the files the run left and its download (call before any re-run).
+- name: Check the Oracle homes
+  ansible.builtin.include_tasks: check_home.yml
+  loop: "{{ molecule_expected_homes }}"
+  loop_control:
+    loop_var: molecule_home_check
+    label: "{{ molecule_home_check.path }}"
+
+- name: Check the databases
+  ansible.builtin.include_tasks: check_database.yml
+  loop: "{{ molecule_databases }}"
+  loop_control:
+    loop_var: molecule_db
+    label: "{{ molecule_db.sid }}"
+
+- name: Check the files the run left and the download
+  ansible.builtin.include_tasks: check_run_files.yml

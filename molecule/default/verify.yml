@@ -1,0 +1,69 @@
+---
+# Checks what converge.yml did, then runs the playbook twice more and checks that neither run stops or changes anything:
+#   1. unchanged: the patch is already applied in every database in scope, so the run ends successfully as "unneeded"
+#      before anything is stopped (the re-run after a successful run);
+#   2. with a wrong (but well-formed) checksum: the download is refused, the failure report names the stage and the
+#      state left behind, and this run's files are removed.
+# Read-only on the hosts apart from those two runs.
+- name: Verify the patch run
+  hosts: molecule_oracle
+  tasks:
+    - name: Check the result of converge
+      ansible.builtin.include_tasks: ../shared/tasks/check_converge.yml
+
+    - name: Re-run the playbook (already applied) and check it stopped and changed nothing
+      ansible.builtin.include_tasks: ../shared/tasks/rerun_applied.yml
+
+    # --- Re-run: wrong checksum ----------------------------------------------------------------------------------
+    - name: Run the playbook with a wrong checksum
+      ansible.builtin.include_tasks: ../shared/tasks/rerun.yml
+      vars:
+        molecule_rerun_name: wrong checksum
+        # Well-formed (passes the input validation), but not the bundle's digest.
+        molecule_rerun_extra_vars:
+          oracle_common_patch_checksum: "sha256:{{ '0123456789abcdef' * 4 }}"
+
+    - name: Check the download was refused and the failure report names the state left behind
+      ansible.builtin.assert:
+        that:
+          - molecule_rerun.rc | int == 2
+          - molecule_rerun.recap | length == 4
+          - molecule_rerun.recap[2] == '0'
+          - molecule_rerun.recap[3] == '1'
+          - >-
+            ('Fail: Run Prereq failed on ' ~ inventory_hostname ~ " in task 'Check the download of the patch bundle") in molecule_rerun.output
+          - "'the checksum does not match oracle_common_patch_checksum' in molecule_rerun.output"
+          - >-
+            ('State left behind: databases: ' ~ DATABASE_NAME ~ ' not stopped by this run; Oracle home: not changed by this run') in molecule_rerun.output
+          - "'the script and staging directories this run created were removed' in molecule_rerun.output"
+        fail_msg: >-
+          Expected rc 2, "failed=1" and the download failure report; got rc {{ molecule_rerun.rc }}, recap (ok, changed,
+          unreachable, failed) {{ molecule_rerun.recap }}.
+
+    - name: Record the host state after the refused download
+      ansible.builtin.include_tasks: ../shared/tasks/host_state.yml
+      vars:
+        molecule_state_name: after_wrong_checksum
+
+    - name: Check the refused run stopped and changed nothing
+      ansible.builtin.assert:
+        that: molecule_states.before == molecule_states.after_wrong_checksum
+        fail_msg: >-
+          The refused run changed the databases, listeners or Oracle homes: before {{ molecule_states.before }};
+          after {{ molecule_states.after_wrong_checksum }}
+
+    - name: Find staging and script directories left by the re-runs
+      ansible.builtin.find:
+        paths:
+          - "{{ molecule_oracle_base }}/software_dir"
+          - "{{ molecule_oracle_base }}/ansible_patch_work"
+        file_type: directory
+        recurse: true
+        depth: 2
+        patterns: "*_{{ DATABASE_NAME }}_*,ora_ansible_scripts_*"
+      register: molecule_leftovers
+
+    - name: Check both re-runs removed their staging and script directories (the logs are kept)
+      ansible.builtin.assert:
+        that: molecule_leftovers.files | map(attribute='path') | reject('search', '/ora_db_patch_') | list | length == 0
+        fail_msg: "Left behind: {{ molecule_leftovers.files | map(attribute='path') | list }}"

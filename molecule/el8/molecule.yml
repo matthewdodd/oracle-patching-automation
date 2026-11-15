@@ -1,0 +1,136 @@
+---
+# End-to-end test of oracle_database_patch.yml on Rocky Linux 8 with stub Oracle software (plan finding U6-01), driven
+# with the ORIGINAL input names (aliases), to show they keep working. Nothing here is Oracle software and no real host
+# is touched.
+#
+#   el8-db  one database in scope, MOLDB8: an upper-case ORACLE_SID with an upper-case sid_server_dict key (the start and
+#           stop steps receive the SID in lower case and find the entry through the SID as given), a non-CDB without
+#           Java components (the OJVM patch is not applied), Python 3.11 as the target interpreter
+#
+# Original input names used here: artifactory_repo (naming the release folder itself), oracle_patch_cycle,
+# oracle_patch_checksum, oracle_patch_poll_delay, GROUP_NAME, script_permission, is_grid_layout and override_chg as the
+# legacy strings "false" / "true". The patch year is not set: the default (the target's current year) is used.
+# prepare.yml, the stubs and the checks are shared with the other scenarios (../shared); see ../README.md.
+#
+# Run from the repository root:
+#   pip install -r requirements-test.txt
+#   molecule test --scenario-name el8
+dependency:
+  # Installs collections.yml from this directory (community.docker for the driver, ansible.posix for its create
+  # playbook, servicenow.itsm for the playbook's change check). Nothing else installs them: the CI workflow only installs
+  # requirements-test.txt. A shell step and not the galaxy one, because the galaxy dependency always runs a roles install
+  # as well and reports it as missing when there is no roles requirements.yml (the scenarios need no roles).
+  name: shell
+  command: ansible-galaxy collection install --requirements-file "${MOLECULE_SCENARIO_DIRECTORY}/collections.yml"
+
+driver:
+  name: docker
+
+platforms:
+  - name: el8-db
+    image: docker.io/rockylinux/rockylinux:8.10
+    pre_build_image: false
+    dockerfile: ../shared/Dockerfile.j2
+    groups: [molecule_oracle]
+
+ansible:
+  cfg:
+    defaults:
+      # The repository's roles (Molecule writes its own ansible.cfg, so the repository ansible.cfg is not read).
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
+      stdout_callback: ansible.builtin.default
+      callback_result_format: yaml
+  playbooks:
+    # Shared by every scenario (paths are relative to this directory).
+    prepare: ../shared/prepare.yml
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      el8-db:
+        # AppStream Python 3.11 (ansible-core 2.22 needs 3.9 or later on the target; the platform Python is 3.6).
+        ansible_python_interpreter: /usr/bin/python3.11
+    group_vars:
+      # "all" (not molecule_oracle): the playbook's first plays run on localhost, which reads only the all group,
+      # exactly as AAP survey answers and the inventory's group_vars/all reach every play.
+      all:
+        # --- Job inputs (the AAP survey names; target is set by converge.yml) ------------------------------------
+        DATABASE_NAME: MOLDB8
+        TICKET_NUMBER: CHG0012346
+        # The legacy string form (still accepted): the change check is skipped.
+        override_chg: "true"
+        sid_server_dict:
+          MOLDB8:
+            dbowner: oracle
+            # Non-CDB: the PDB listener steps are skipped.
+            pdb: ""
+            dbvip: ""
+            dbListener: LISTENER_MOLDB8
+            pdbListener: ""
+
+        # --- Environment inputs (original names, accepted as aliases of oracle_common_*) ------------------------
+        GROUP_NAME: "{{ molecule_automation_group }}"
+        script_permission: "0750"
+        is_grid_layout: "false"
+        # The original input names the release folder itself (oracle_common_patch_repo_version_subdir is then false).
+        artifactory_repo: "{{ molecule_repository_release_url }}"
+        # Bundle LINUX_jul<YY>.tar.gz, YY the target's current year (the default patch year).
+        oracle_patch_cycle: jul
+        oracle_patch_checksum: "sha256:{{ molecule_repository_release_url }}/{{ molecule_bundle_file }}.sha256"
+        oracle_patch_poll_delay: 5
+        # No Teams webhook: every notification is skipped with a message (best effort, never fatal).
+
+        # --- Test fixture (molecule_*; used by ../shared/prepare.yml and the verify tasks only) ------------------
+        molecule_oracle_base: /u01/oracle
+        molecule_env_dir: /local
+        molecule_automation_group: oraauto
+        molecule_repository:
+          address: 127.0.0.1
+          port: 8443
+          dir: /srv/oracle-artifacts
+          tls_dir: /etc/molecule-repository
+          access_log: /var/log/molecule-repository.log
+          release: "19.0.0"
+        molecule_repository_release_url: "https://{{ molecule_repository.address }}:{{ molecule_repository.port }}/oracledatabase/19.0.0"
+        # The name the playbook derives with the default patch year (facts are gathered on the host first).
+        molecule_bundle_file: "LINUX_jul{{ (ansible_facts['date_time']['year'] | string)[-2:] }}.tar.gz"
+        molecule_patch:
+          ru_id: "99200001"
+          ojvm_id: "99200002"
+          old_opatch_version: 12.2.0.1.39
+          new_opatch_version: 12.2.0.1.47
+        molecule_db_version: 19.0.0.0.0
+        molecule_db_version_full: 19.26.0.0.0
+        molecule_homes:
+          - /u01/oracle/product/19.0.0/dbhome_1
+        # patched: what verify.yml expects after converge.
+        molecule_databases:
+          - sid: MOLDB8
+            home: /u01/oracle/product/19.0.0/dbhome_1
+            pdbs: []
+            java: false
+            listeners: [LISTENER_MOLDB8]
+            patched: true
+        # No database in scope has Java components: the OJVM patch is not applied to the home.
+        molecule_expected_homes:
+          - {path: /u01/oracle/product/19.0.0/dbhome_1, patched: true, ojvm: false}
+
+verifier:
+  name: ansible
+
+scenario:
+  name: el8
+  # No built-in idempotence step: a re-run creates its own per-run working directory (oracle_common_unique_work_dirs), so
+  # it never reports changed=0. verify.yml re-runs the playbook and checks the outcome instead (see ../default).
+  # There is no cleanup step (no cleanup playbook): the scenario changes nothing outside its container, so destroy
+  # removes everything it created.
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

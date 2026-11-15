@@ -1,0 +1,49 @@
+---
+# Runs the unmodified patch playbook (again) from the controller (ansible-playbook with the scenario's inventory and
+# configuration), as an AAP job would, against every test host. Include variables:
+#   molecule_rerun_name        label
+#   molecule_rerun_extra_vars  extra vars on top of target (optional), e.g. {"oracle_patch_databases": ["molb"]}
+# Sets molecule_rerun on every host: rc, output (stdout and stderr with whitespace collapsed and YAML-doubled quotes
+# undone, for substring checks) and recap ([ok, changed, unreachable, failed] of this host, as strings; [] when missing).
+# Failed tasks are reported on stderr: Molecule's ansible.cfg (inherited through ANSIBLE_CONFIG) sets
+# display_failed_stderr, so failure messages are matched on stdout and stderr together; the recap is always on stdout.
+- name: Run the patch playbook - {{ molecule_rerun_name }}
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - --inventory
+      - "{{ lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE') }}"
+      - --extra-vars
+      - "{{ {'target': groups['molecule_oracle'] | join(',')} | combine(molecule_rerun_extra_vars | default({})) | to_json }}"
+      # Every scenario playbook is molecule/<scenario>/<file>.yml.
+      - "{{ playbook_dir }}/../../oracle_database_patch.yml"
+  environment:
+    # Plain text for the checks below (CI forces colours for the outer run).
+    ANSIBLE_NOCOLOR: "1"
+    ANSIBLE_FORCE_COLOR: "0"
+  delegate_to: localhost
+  run_once: true
+  register: __molecule_rerun_result
+  changed_when: false
+  failed_when: false
+
+- name: Show the end of the run - {{ molecule_rerun_name }}
+  ansible.builtin.debug:
+    msg:
+      rc: "{{ __molecule_rerun_result.rc }}"
+      stdout: "{{ __molecule_rerun_result.stdout_lines[-30:] }}"
+      stderr: "{{ __molecule_rerun_result.stderr_lines[-30:] }}"
+  run_once: true
+
+- name: Keep the result - {{ molecule_rerun_name }}
+  ansible.builtin.set_fact:
+    molecule_rerun:
+      rc: "{{ __molecule_rerun_result.rc }}"
+      output: >-
+        {{ (__molecule_rerun_result.stdout ~ '\n' ~ __molecule_rerun_result.stderr)
+           | regex_replace('\\s+', ' ') | replace("''", "'") }}
+      recap: >-
+        {{ __molecule_rerun_result.stdout
+           | regex_search('(?m)^' ~ (inventory_hostname | regex_escape)
+                          ~ '\s*:\s*ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)', '\1', '\2', '\3', '\4')
+           | default([], true) }}

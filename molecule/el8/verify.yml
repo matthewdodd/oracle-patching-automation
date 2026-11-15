@@ -1,0 +1,13 @@
+---
+# Checks what converge.yml did (the Release Update applied without the OJVM patch, OPatch upgraded with the previous one
+# kept, the database restarted with its listener, the run's files removed, the download over https with its checksum),
+# then runs the playbook again unchanged: the patch is already applied, so the run ends as "unneeded" without stopping
+# or changing anything. Read-only on the host apart from that run.
+- name: Verify the patch run
+  hosts: molecule_oracle
+  tasks:
+    - name: Check the result of converge
+      ansible.builtin.include_tasks: ../shared/tasks/check_converge.yml
+
+    - name: Re-run the playbook (already applied) and check it stopped and changed nothing
+      ansible.builtin.include_tasks: ../shared/tasks/rerun_applied.yml

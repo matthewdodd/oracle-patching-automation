@@ -1,0 +1,11 @@
+---
+# Collections installed by this scenario's dependency step (molecule.yml): the docker driver needs community.docker,
+# its create playbook ansible.posix (synchronize); the playbook under test needs servicenow.itsm (change check module,
+# resolved even when override_chg skips it) and ansible.posix. Same pins as collections/requirements.yml.
+collections:
+  - name: community.docker
+    version: "5.4.0"
+  - name: ansible.posix
+    version: "2.2.2"
+  - name: servicenow.itsm
+    version: "2.17.0"

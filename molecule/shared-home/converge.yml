@@ -1,0 +1,18 @@
+---
+# 1. A run with only DATABASE_NAME (molb) in scope, while mola runs from the same ORACLE_HOME, must be refused by the
+#    shared home check before anything is stopped or changed (tasks/refused_partial_scope.yml).
+# 2. The unmodified playbook with both databases in scope (oracle_patch_databases in molecule.yml), as an AAP job template
+#    would run it: target is the comma-separated host list, every other input comes from the inventory.
+- name: Check a run with only DATABASE_NAME in scope is refused (shared Oracle home)
+  hosts: molecule_oracle
+  gather_facts: false
+  tasks:
+    - name: Run the playbook with only DATABASE_NAME in scope and check it is refused
+      ansible.builtin.include_tasks: tasks/refused_partial_scope.yml
+      vars:
+        molecule_refusal_name: before the patch
+
+- name: Patch both databases of the shared Oracle home (stub Oracle software)
+  ansible.builtin.import_playbook: ../../oracle_database_patch.yml
+  vars:
+    target: "{{ groups['molecule_oracle'] | join(',') }}"

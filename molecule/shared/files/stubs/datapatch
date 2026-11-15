@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# TEST STUB - NOT ORACLE SOFTWARE. Molecule stand-in for <ORACLE_HOME>/OPatch/datapatch (shipped next to the opatch stub
+# in the fake homes and in the fake patch bundle). Like datapatch, it needs the instance of $ORACLE_SID to run (the
+# ora_pmon_<SID> process started by the sqlplus stub) and loads the SQL changes of every patch applied to the home
+# (<ORACLE_HOME>/install/molecule_applied_patches, written by the opatch stub) that the database does not have yet:
+# a row "<id> SUCCESS <install id> APPLY <date> <time> <title>" is added at the top of the database's
+# dba_registry_sqlpatch ($ORACLE_BASE/molecule_state/$ORACLE_SID/sqlpatch, newest first). The OJVM patch (title
+# containing "JavaVM") is only recorded in a database with Java components. Every run adds invalid_delta to the
+# invalid object count, so database_patch.bash's utlrp step can be exercised.
+set -u
+
+die() {
+  printf '%s\n' "$*"
+  exit 1
+}
+
+read_file() {
+  if [[ -f $1 ]]; then cat -- "$1"; else printf '%s\n' "${2:-}"; fi
+}
+
+instance_running() {
+  [[ -n $(ps -e -o pid= -o args= | awk -v name="ora_pmon_$ORACLE_SID" '$2 == name && NF == 2 { print $1 }') ]]
+}
+
+already_applied() {
+  [[ -f $S/sqlpatch ]] && awk -v id="$1" '$1 == id && $2 == "SUCCESS" && $4 == "APPLY" { found = 1 } END { exit found ? 0 : 1 }' "$S/sqlpatch"
+}
+
+apply_patches() {
+  local registry=$1 run=$2 id title new_rows=""
+  while IFS=';' read -r id title; do
+    [[ -n $id ]] || continue
+    if [[ $title == *JavaVM* && ! -s $S/jvm_components ]]; then
+      echo "Patch $id ($title): not applicable, no Java components installed"
+      continue
+    fi
+    if already_applied "$id"; then
+      echo "Patch $id ($title): already applied"
+      continue
+    fi
+    echo "Patch $id apply: SUCCESS"
+    new_rows="${new_rows}${id} SUCCESS ${run} APPLY $(date +%d-%b-%y) $(date +%H.%M.%S) ${title}"$'\n'
+  done <"$registry"
+  { printf '%s' "$new_rows"; read_file "$S/sqlpatch" ""; } | sed '/^$/d' >"$S/sqlpatch.new" || return 1
+  mv -- "$S/sqlpatch.new" "$S/sqlpatch"
+}
+
+main() {
+  local opatch_dir oracle_home runs count delta
+  opatch_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P) || exit 1
+  oracle_home=$(dirname -- "$opatch_dir")
+  [[ -n ${ORACLE_SID:-} && -n ${ORACLE_BASE:-} ]] || die "datapatch stub: ORACLE_SID and ORACLE_BASE must be set"
+  S="$ORACLE_BASE/molecule_state/$ORACLE_SID"
+  [[ -d $S ]] || die "datapatch stub: no state directory $S"
+
+  echo "SQL Patching tool version 19.27.0.0.0 Production (test stub)"
+  echo "Connecting to database..."
+  if ! instance_running; then
+    echo "ORA-01034: ORACLE not available"
+    die "Connecting to database...failed"
+  fi
+  echo "Connecting to database...OK"
+  echo "Current state of interim SQL patches: $(read_file "$S/open_mode" OPEN)"
+
+  runs=$(($(read_file "$S/datapatch_runs" 0) + 1))
+  printf '%s\n' "$runs" >"$S/datapatch_runs"
+  if [[ -f $oracle_home/install/molecule_applied_patches ]]; then
+    apply_patches "$oracle_home/install/molecule_applied_patches" "$runs" || die "datapatch stub: cannot update $S/sqlpatch"
+  fi
+  delta=$(read_file "$S/invalid_delta" 0)
+  count=$(read_file "$S/invalid_count" 0)
+  printf '%s\n' "$((count + delta))" >"$S/invalid_count"
+  printf '%s\n' "datapatch" >>"$S/history"
+  echo "SQL Patching tool complete"
+  return 0
+}
+
+S=""
+main "$@"
+exit $?

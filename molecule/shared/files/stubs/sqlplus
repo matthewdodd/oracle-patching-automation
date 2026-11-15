@@ -1,0 +1,244 @@
+#!/bin/bash
+#
+# TEST STUB - NOT ORACLE SOFTWARE. Molecule stand-in for <ORACLE_HOME>/bin/sqlplus (installed by
+# molecule/shared/tasks/fake_home.yml). Reads SQL from stdin, like "sqlplus /nolog" + "connect / as sysdba" or
+# "sqlplus [-S] / as sysdba", and answers the statements the bundled scripts send:
+#   startup [upgrade]                      starts the instance: background processes ora_pmon_<SID> and
+#                                          ora_smon_<SID> running <ORACLE_HOME>/bin/oracle (a copy of bash reading a
+#                                          FIFO), so ps, /proc/<pid>/exe and home_inventory.bash see a real instance
+#   shutdown [immediate]                   stops those processes
+#   alter pluggable database all open ...  opens the PDBs
+#   @?/rdbms/admin/utlrp.sql               resets the invalid object count
+#   queries on v$instance, v$database, v$pdbs, dba_registry, dba_registry_sqlpatch and dba_objects
+# SPOOL <file> / SPOOL OFF are honoured. Column headings are never printed.
+#
+# State (written by molecule/shared/tasks/fake_database.yml, then by the stubs) in
+# $ORACLE_BASE/molecule_state/$ORACLE_SID/ (ORACLE_BASE and ORACLE_SID come from the database environment file):
+#   open_mode       v$instance.status while the instance runs (OPEN, or OPEN MIGRATE after startup upgrade)
+#   version         v$instance.version; version_full: v$instance.version_full
+#   cdb             YES or NO; pdbs: PDB names, one per line; pdbs_rw: the PDBs open READ WRITE
+#   jvm_components  rows of dba_registry for the Java components (empty: no Java)
+#   sqlpatch        rows of dba_registry_sqlpatch, newest first (written by the datapatch stub)
+#   invalid_count   invalid objects; utlrp.sql sets it back to invalid_base
+#   history         one line per startup, shutdown, utlrp and datapatch run (read by the Molecule verify playbooks)
+set -u
+
+spool=""
+
+out() {
+  printf '%s\n' "$*"
+  if [[ -n $spool ]]; then
+    printf '%s\n' "$*" >>"$spool"
+  fi
+}
+
+die() {
+  printf '%s\n' "$*"
+  exit 1
+}
+
+read_file() {
+  if [[ -f $1 ]]; then cat -- "$1"; else printf '%s\n' "${2:-}"; fi
+}
+
+record() {
+  printf '%s\n' "$*" >>"$S/history"
+}
+
+# Runs "$@" in the background in its own session when setsid is available (util-linux; the test image installs it),
+# so the process outlives the caller's session; otherwise just in the background.
+detach() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" &
+  else
+    "$@" &
+  fi
+}
+
+# PIDs of the processes whose whole command line is exactly $1 (ora_pmon_<SID> has no arguments).
+pids_of() {
+  ps -e -o pid= -o args= | awk -v name="$1" '$2 == name && NF == 2 { print $1 }'
+}
+
+instance_running() {
+  [[ -n $(pids_of "ora_pmon_$ORACLE_SID") ]]
+}
+
+# Starts one background process named $1 (argv[0]) from <ORACLE_HOME>/bin/oracle, detached from this session. It reads
+# a FIFO opened read-write, so it blocks forever without using CPU, and holds no descriptor of the caller.
+start_background() {
+  [[ -p $S/bg.fifo ]] || mkfifo -m 0600 "$S/bg.fifo" || return 1
+  # shellcheck disable=SC2016  # the single-quoted script is expanded by the inner bash
+  detach bash -c 'exec -a "$0" "$1" <>"$2" >/dev/null 2>&1' "$1" "$ORACLE_HOME/bin/oracle" "$S/bg.fifo"
+}
+
+# Waits up to 10 s until the process named $1 exists (want=up) or is gone (want=down).
+wait_for() {
+  local name=$1 want=$2 i
+  for ((i = 0; i < 50; i++)); do
+    if [[ -n $(pids_of "$name") ]]; then
+      [[ $want == up ]] && return 0
+    else
+      [[ $want == down ]] && return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+instance_startup() {
+  local mode=$1 name
+  if instance_running; then
+    out "ORA-01081: cannot start already-running ORACLE - shut it down first"
+    return 0
+  fi
+  for name in "ora_pmon_$ORACLE_SID" "ora_smon_$ORACLE_SID"; do
+    start_background "$name" || die "sqlplus stub: cannot start $name"
+    wait_for "$name" up || die "sqlplus stub: $name did not start"
+  done
+  printf '%s\n' "$mode" >"$S/open_mode"
+  : >"$S/pdbs_rw"
+  record "startup $mode"
+  out "ORACLE instance started."
+  out "Database mounted."
+  out "Database opened."
+}
+
+instance_shutdown() {
+  local name pid
+  if ! instance_running; then
+    out "ORA-01034: ORACLE not available"
+    return 0
+  fi
+  for name in "ora_pmon_$ORACLE_SID" "ora_smon_$ORACLE_SID"; do
+    for pid in $(pids_of "$name"); do
+      kill "$pid" 2>/dev/null
+    done
+    if ! wait_for "$name" down; then
+      for pid in $(pids_of "$name"); do
+        kill -9 "$pid" 2>/dev/null
+      done
+      wait_for "$name" down || die "sqlplus stub: $name did not stop"
+    fi
+  done
+  : >"$S/pdbs_rw"
+  record "shutdown"
+  out "Database closed."
+  out "Database dismounted."
+  out "ORACLE instance shut down."
+}
+
+# Prints the rows of a state file, or nothing.
+rows_file() {
+  local line
+  [[ -s $1 ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -n $line ]] && out "$line"
+  done <"$1"
+}
+
+query_instance() {
+  local lc=$1 status
+  status=$(read_file "$S/open_mode" OPEN)
+  case $lc in
+    *"instance_status="*) out "INSTANCE_STATUS=$status" ;;
+    *"version_full="*) out "VERSION_FULL=$(read_file "$S/version_full" 19.0.0.0.0)" ;;
+    *"version="*) out "VERSION=$(read_file "$S/version" 19.0.0.0.0)" ;;
+    *) out "$ORACLE_SID $status ACTIVE" ;;
+  esac
+}
+
+query_pdbs() {
+  local pdb
+  while IFS= read -r pdb; do
+    [[ -n $pdb ]] || continue
+    if ! grep -q -x -F -e "$pdb" "$S/pdbs_rw" 2>/dev/null; then
+      out "PDB_NOT_RW=$pdb"
+    fi
+  done < <(read_file "$S/pdbs" "")
+}
+
+open_pdbs() {
+  case $1 in
+    *upgrade*) : >"$S/pdbs_rw" ;;
+    *) read_file "$S/pdbs" "" >"$S/pdbs_rw" ;;
+  esac
+}
+
+utlrp() {
+  read_file "$S/invalid_base" 0 >"$S/invalid_count"
+  record "utlrp"
+  out "PL/SQL procedure successfully completed."
+}
+
+# One SQL line (already lower-cased and trimmed in $2; $1 is the original line).
+statement() {
+  local line=$1 lc=$2
+  case $lc in
+    "connect / as sysdba"*)
+      if instance_running; then out "Connected."; else out "Connected to an idle instance."; fi
+      return 0
+      ;;
+    "spool off"*)
+      spool=""
+      return 0
+      ;;
+    "spool "*)
+      spool=$(printf '%s' "$line" | sed -e 's/^[[:space:]]*[Ss][Pp][Oo][Oo][Ll][[:space:]]*//' -e 's/[[:space:]]*;*[[:space:]]*$//')
+      : >"$spool" || die "SP2-0606: Cannot create SPOOL file \"$spool\""
+      return 0
+      ;;
+    startup*upgrade*)
+      instance_startup "OPEN MIGRATE"
+      return 0
+      ;;
+    startup*)
+      instance_startup "OPEN"
+      return 0
+      ;;
+    shutdown*)
+      instance_shutdown
+      return 0
+      ;;
+  esac
+  case $lc in
+    *"alter pluggable database all open"* | *"utlrp.sql"* | *"from v\$instance"* | *"from v\$database"* | *"from v\$pdbs"* | \
+      *"from dba_registry_sqlpatch"* | *"from dba_registry "* | *"invalid_count="*)
+      if ! instance_running; then
+        out "ORA-01034: ORACLE not available"
+        return 0
+      fi
+      ;;
+    *) return 0 ;;
+  esac
+  case $lc in
+    *"alter pluggable database all open"*) open_pdbs "$lc" ;;
+    *"utlrp.sql"*) utlrp ;;
+    *"from v\$instance"*) query_instance "$lc" ;;
+    *"from v\$database"*) out "CDB=$(read_file "$S/cdb" NO)" ;;
+    *"from v\$pdbs"*) query_pdbs ;;
+    *"from dba_registry_sqlpatch"*) rows_file "$S/sqlpatch" ;;
+    *"from dba_registry "*) rows_file "$S/jvm_components" ;;
+    *"invalid_count="*) out "INVALID_COUNT=$(read_file "$S/invalid_count" 0)" ;;
+  esac
+}
+
+main() {
+  local line lc
+  [[ -n ${ORACLE_HOME:-} && -n ${ORACLE_SID:-} && -n ${ORACLE_BASE:-} ]] ||
+    die "ORA-12162: TNS:net service name is incorrectly specified (test stub: ORACLE_HOME, ORACLE_SID and ORACLE_BASE must be set)"
+  S="$ORACLE_BASE/molecule_state/$ORACLE_SID"
+  [[ -d $S ]] || die "ORA-01078: failure in processing system parameters (test stub: no state directory $S)"
+  while IFS= read -r line || [[ -n $line ]]; do
+    lc=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    case $lc in
+      exit | exit\; | quit | quit\;) break ;;
+    esac
+    statement "$line" "$lc"
+  done
+  return 0
+}
+
+S=""
+main "$@"
+exit $?

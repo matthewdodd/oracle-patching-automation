@@ -1,0 +1,151 @@
+---
+# End-to-end test of the shared ORACLE_HOME rule on AlmaLinux 9 with stub Oracle software (plan finding U6-01, owner
+# decision: detect a shared home and refuse unless every database that uses it is in scope). Nothing here is Oracle
+# software and no real host is touched.
+#
+#   el9-shared  two running databases on one home (dbhome_1): mola (a CDB with a PDB and Java components) and molb (a
+#               non-CDB without Java), found through oratab, their environment files and their ora_pmon processes
+#
+# converge.yml first runs the playbook with only DATABASE_NAME (molb) in scope: it must be refused by the shared home
+# check before anything is stopped or changed. Then it runs the unmodified playbook with both databases in scope
+# (oracle_patch_databases, alias of oracle_common_patch_databases, as the comma separated text of an AAP survey field):
+# both are stopped, the patch is applied to the home once (by mola, the database with Java, so the OJVM patch reaches
+# the home), datapatch runs in each, and both are started again. verify.yml checks the result, re-runs the playbook
+# (already applied: nothing stopped) and checks that a run with molb alone is still refused.
+# prepare.yml, the stubs and the checks are shared with the other scenarios (../shared); see ../README.md.
+#
+# Run from the repository root:
+#   pip install -r requirements-test.txt
+#   molecule test --scenario-name shared-home
+dependency:
+  # Installs collections.yml from this directory (community.docker for the driver, ansible.posix for its create
+  # playbook, servicenow.itsm for the playbook's change check). Nothing else installs them: the CI workflow only installs
+  # requirements-test.txt. A shell step and not the galaxy one, because the galaxy dependency always runs a roles install
+  # as well and reports it as missing when there is no roles requirements.yml (the scenarios need no roles).
+  name: shell
+  command: ansible-galaxy collection install --requirements-file "${MOLECULE_SCENARIO_DIRECTORY}/collections.yml"
+
+driver:
+  name: docker
+
+platforms:
+  - name: el9-shared
+    image: docker.io/library/almalinux:9.6
+    pre_build_image: false
+    dockerfile: ../shared/Dockerfile.j2
+    groups: [molecule_oracle]
+
+ansible:
+  cfg:
+    defaults:
+      # The repository's roles (Molecule writes its own ansible.cfg, so the repository ansible.cfg is not read).
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
+      stdout_callback: ansible.builtin.default
+      callback_result_format: yaml
+  playbooks:
+    # Shared by every scenario (paths are relative to this directory).
+    prepare: ../shared/prepare.yml
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      el9-shared:
+        ansible_python_interpreter: /usr/bin/python3
+    group_vars:
+      # "all" (not molecule_oracle): the playbook's first plays run on localhost, which reads only the all group,
+      # exactly as AAP survey answers and the inventory's group_vars/all reach every play.
+      all:
+        # --- Job inputs (the AAP survey names; target is set by converge.yml) ------------------------------------
+        DATABASE_NAME: molb
+        TICKET_NUMBER: CHG0012347
+        override_chg: true
+        sid_server_dict:
+          mola:
+            dbowner: oracle
+            pdb: MOLAPDB
+            dbvip: ""
+            dbListener: LISTENER_MOLA
+            pdbListener: LISTENER_MOLAPDB
+          molb:
+            dbowner: oracle
+            pdb: ""
+            dbvip: ""
+            dbListener: LISTENER_MOLB
+            pdbListener: ""
+        # Every database of the home (comma separated text, as an AAP survey field); DATABASE_NAME runs first.
+        oracle_patch_databases: "molb, mola"
+
+        # --- Environment inputs (canonical oracle_common_* names; real values live in inventory/<env>/) ----------
+        oracle_common_group_name: "{{ molecule_automation_group }}"
+        oracle_common_patch_repo_url: "https://{{ molecule_repository.address }}:{{ molecule_repository.port }}/oracledatabase"
+        oracle_common_patch_cycle: oct
+        oracle_common_patch_year: "2026"
+        oracle_common_patch_checksum: "sha256:{{ molecule_repository_release_url }}/{{ molecule_bundle_file }}.sha256"
+        oracle_common_patch_poll_delay: 5
+        # No Teams webhook: every notification is skipped with a message (best effort, never fatal).
+
+        # --- Test fixture (molecule_*; used by ../shared/prepare.yml, converge.yml and the verify tasks only) -----
+        molecule_oracle_base: /u01/oracle
+        molecule_env_dir: /local
+        molecule_automation_group: oraauto
+        molecule_repository:
+          address: 127.0.0.1
+          port: 8443
+          dir: /srv/oracle-artifacts
+          tls_dir: /etc/molecule-repository
+          access_log: /var/log/molecule-repository.log
+          release: "19.0.0"
+        molecule_repository_release_url: "https://{{ molecule_repository.address }}:{{ molecule_repository.port }}/oracledatabase/19.0.0"
+        # Four-digit year: LINUX_oct2026.tar.gz.
+        molecule_bundle_file: LINUX_oct2026.tar.gz
+        molecule_patch:
+          ru_id: "99300001"
+          ojvm_id: "99300002"
+          old_opatch_version: 12.2.0.1.40
+          new_opatch_version: 12.2.0.1.48
+        molecule_db_version: 19.0.0.0.0
+        molecule_db_version_full: 19.28.0.0.0
+        molecule_shared_home: /u01/oracle/product/19.0.0/dbhome_1
+        molecule_homes:
+          - /u01/oracle/product/19.0.0/dbhome_1
+        # The databases in scope in run order (DATABASE_NAME first), as the playbook reports them.
+        molecule_scope: [molb, mola]
+        # patched: what verify.yml expects after converge.
+        molecule_databases:
+          - sid: mola
+            home: /u01/oracle/product/19.0.0/dbhome_1
+            pdbs: [MOLAPDB]
+            java: true
+            listeners: [LISTENER_MOLA, LISTENER_MOLAPDB]
+            invalid_delta: 2
+            patched: true
+          - sid: molb
+            home: /u01/oracle/product/19.0.0/dbhome_1
+            pdbs: []
+            java: false
+            listeners: [LISTENER_MOLB]
+            patched: true
+        molecule_expected_homes:
+          - {path: /u01/oracle/product/19.0.0/dbhome_1, patched: true, ojvm: true}
+        # converge.yml runs the playbook twice (the refused run, then the patch run): two working directories with logs.
+        molecule_expected_work_dirs: 2
+
+verifier:
+  name: ansible
+
+scenario:
+  name: shared-home
+  # No built-in idempotence step: a re-run creates its own per-run working directory (oracle_common_unique_work_dirs), so
+  # it never reports changed=0. verify.yml re-runs the playbook and checks the outcome instead (see ../default).
+  # There is no cleanup step (no cleanup playbook): the scenario changes nothing outside its container, so destroy
+  # removes everything it created.
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy
