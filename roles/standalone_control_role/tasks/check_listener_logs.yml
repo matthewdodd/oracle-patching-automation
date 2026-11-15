@@ -9,6 +9,11 @@
     mode: "{{ oracle_common_modes.script }}"
     force: true
   delegate_to: "{{ server_name }}"
+  # Written as the database owner: remote_script_directory belongs to that user and is no longer
+  # world-writable (0777 removed), so the SSH user cannot write into it.
+  become: true
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_method: ansible.builtin.sudo
 
 
 - name: Checking listener logs for errors for {{ ORACLE_SID }}

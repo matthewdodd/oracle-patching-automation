@@ -8,6 +8,9 @@
     server_name: "{{ target }}"
 
 - name: Copy Scripts to {{ remote_script_directory }}
+  # Written as the database owner, who owns remote_script_directory (no longer world-writable).
+  become: true
+  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
   block:
     - name: Create roles/oracle_database_patch_role/files if not exist
       copy:

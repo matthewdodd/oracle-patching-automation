@@ -1,0 +1,70 @@
+---
+# Regression test: every task that writes into remote_script_directory runs as the database owner.
+# Runs on the controller only, reads the task files as data and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/script_copy_become.yml
+#
+# initialization_role creates remote_script_directory as sid_server_dict[SID].dbowner with
+# oracle_common_modes.script. That mode used to be 0777, so the copy tasks could run as the SSH user. 0777 is no
+# longer allowed (the default is 0755), so a copy made as the SSH user fails with "Destination ... not writable"
+# whenever the SSH user is neither root nor the database owner. Each copy task (or its enclosing block) must
+# therefore become the database owner.
+- name: Script copy privilege regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    copy_task_files:
+      - roles/initialization_role/tasks/main.yml
+      - roles/oracle_database_patch_role/tasks/main.yml
+      - roles/standalone_control_role/tasks/check_alert_log.yml
+      - roles/standalone_control_role/tasks/check_listener_logs.yml
+      - roles/standalone_control_role/tasks/rename_logs.yml
+      - roles/standalone_control_role/tasks/start_pdb_listener.yml
+      - roles/standalone_control_role/tasks/stop_database.yml
+      - roles/standalone_control_role/tasks/stop_listener.yml
+      - roles/standalone_control_role/tasks/stop_pdb_listener.yml
+  tasks:
+    - name: Check every copy into remote_script_directory becomes the database owner
+      vars:
+        task_list: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../' ~ item) | from_yaml }}"
+        # Flatten one level of block, letting a task inherit become/become_user from its block.
+        flat_tasks: >-
+          {%- set out = [] -%}
+          {%- for t in task_list -%}
+          {%-   if 'block' in t -%}
+          {%-     for c in t['block'] -%}
+          {%-       set _ = out.append({'name': c.name | default(''), 'module': c,
+                                     'become': c.become | default(t.become | default(false)),
+                                     'become_user': c.become_user | default(t.become_user | default(''))}) -%}
+          {%-     endfor -%}
+          {%-   else -%}
+          {%-     set _ = out.append({'name': t.name | default(''), 'module': t,
+                                   'become': t.become | default(false),
+                                   'become_user': t.become_user | default('')}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        copy_tasks: >-
+          {%- set out = [] -%}
+          {%- for t in flat_tasks -%}
+          {#-   bracket access: t.module.copy would resolve to the dict.copy method -#}
+          {%-   set m = t.module['copy'] | default(t.module['ansible.builtin.copy'] | default(none)) -%}
+          {%-   if m is mapping and 'remote_script_directory' in (m['dest'] | default('')) -%}
+          {%-     set _ = out.append(t) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        bad_tasks: >-
+          {{ copy_tasks | rejectattr('become', 'equalto', true)
+             | map(attribute='name') | list
+             + (copy_tasks | rejectattr('become_user', 'search', 'sid_server_dict\[.*\]\.dbowner')
+                | map(attribute='name') | list) }}
+      ansible.builtin.assert:
+        that:
+          - copy_tasks | length > 0
+          - bad_tasks | length == 0
+        fail_msg: >-
+          Copy into remote_script_directory in {{ item }} does not become the database owner:
+          {{ bad_tasks }} (copy tasks found: {{ copy_tasks | length }})
+        success_msg: "All {{ copy_tasks | length }} copy task(s) in {{ item }} become the database owner"
+      loop: "{{ copy_task_files }}"
