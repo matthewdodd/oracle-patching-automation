@@ -2,7 +2,10 @@
 # Chooses this run's working directories on a target, before anything is created there (called first by
 # initialization_role). Validates the patch scope (tasks/preflight_scope.yml), picks the run id once per host and sets:
 #   oracle_common_run         id, unique (per-run directories), primary (DATABASE_NAME), scope (databases in run
-#                             order, DATABASE_NAME first), script_dir, output_root, and databases:
+#                             order, DATABASE_NAME first), script_dir, output_root, script_dir_fixed / output_fixed /
+#                             staging_fixed (the directory is used like the original fixed names: removed and
+#                             re-created, never refused for existing; true without per-run directories or when it
+#                             was given explicitly), and databases:
 #                             {<SID>: {env_file, work_dir, dbowner}}
 #   oracle_common_script_env  {<SID>: environment of the bundled scripts: ORA_ENV_FILE, ORA_WORK_DIR, ORA_ORATAB and,
 #                             when set, ORA_OPATCH_BACKUP_DIR}; tasks/preflight_script_env.yml adds the README patterns
@@ -26,6 +29,9 @@
       scope: "{{ __oracle_common_scope }}"
       script_dir: "{{ __oracle_common_run_script_dir }}"
       output_root: "{{ __oracle_common_run_output_root }}"
+      script_dir_fixed: "{{ __oracle_common_run_script_dir_fixed | bool }}"
+      output_fixed: "{{ __oracle_common_run_output_fixed | bool }}"
+      staging_fixed: "{{ __oracle_common_run_staging_fixed | bool }}"
       databases: "{{ __oracle_common_run_databases }}"
 
 - name: Validate this run's working directories

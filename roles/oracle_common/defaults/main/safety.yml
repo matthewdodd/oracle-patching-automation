@@ -43,7 +43,9 @@ oracle_common_fail_when_already_applied: "{{ oracle_patch_fail_when_already_appl
 # "_<run id>" appended, created fresh by this run (a path that already exists is refused) and removed by the cleanup
 # only because this run created it. Further databases in scope work in <output directory>/<SID>. false: the original
 # fixed names, removed and re-created at the start of a run. remote_script_directory, remote_output_directory and
-# patch_folder_name (or oracle_common_patch_staging_dir) given explicitly are always used exactly as given.
+# patch_folder_name (or oracle_common_patch_staging_dir) given explicitly are always used exactly as given and handled
+# like the original fixed names (removed and re-created at the start of every run, as before), so the next run can use
+# them again.
 # Alias: oracle_patch_unique_work_dirs.
 oracle_common_unique_work_dirs: "{{ oracle_patch_unique_work_dirs | default(true) }}"
 # Run id appended to the working directories: a letter or digit, then letters, digits, _ or -, up to 64 characters.
@@ -95,6 +97,17 @@ __oracle_common_scope: >-
      + (__oracle_common_scope_list | reject('equalto', DATABASE_NAME | default('') | string) | unique | list) }}
 __oracle_common_scope_entries: >-
   {{ __oracle_common_scope | select('in', sid_server_dict | default({})) | map('extract', sid_server_dict | default({})) | list }}
+# Databases in scope whose lower-case ORACLE_SID is another sid_server_dict entry than the ORACLE_SID as given: the start
+# and stop steps (standalone_control_role, which receives the lower-case SID and looks it up first) would use a
+# different entry (dbowner, listeners) than the checks and the patch steps.
+__oracle_common_scope_control_mismatch: >-
+  {%- set ns = namespace(out=[]) -%}
+  {%- set d = sid_server_dict if sid_server_dict is mapping else {} -%}
+  {%- for sid in __oracle_common_scope if sid in d and (sid | lower) != sid and (sid | lower) in d
+                                           and d[sid | lower] != d[sid] -%}
+  {%-   set ns.out = ns.out + [sid] -%}
+  {%- endfor -%}
+  {{ ns.out }}
 __oracle_common_scope_owners: >-
   {{ __oracle_common_scope_entries | select('mapping') | map(attribute='dbowner', default='') | map('string') | unique | list }}
 # Paths checked with the shared path rule (tasks/preflight_scope.yml passes them as __oracle_common_paths).
@@ -125,6 +138,11 @@ __oracle_common_preflight_scope_checks:
     msg: >-
       oracle_common_patch_databases (alias oracle_patch_databases): sid_server_dict has no entry for
       {{ __oracle_common_scope | reject('in', sid_server_dict | default({})) | list | join(', ') }}
+  - failed: "{{ __oracle_common_scope_control_mismatch | length > 0 }}"
+    msg: >-
+      sid_server_dict: the start and stop steps (standalone_control_role) look a database up by its lower-case ORACLE_SID
+      first, and for {{ __oracle_common_scope_control_mismatch | join(', ') }} that finds a different entry than the
+      ORACLE_SID as given; remove the duplicate entry or make both entries identical
   - failed: "{{ __oracle_common_scope_entries | reject('mapping') | list | length > 0 }}"
     msg: "sid_server_dict: the entry of every database in scope must be a dictionary (dbowner, pdb, dbvip, dbListener, pdbListener)"
   - failed: >-
@@ -209,6 +227,15 @@ __oracle_common_run_script_dir: >-
 __oracle_common_run_output_root: >-
   {{ (remote_output_directory | string) if remote_output_directory is defined
      else (oracle_common_remote_output_directory | string) ~ __oracle_common_run_suffix }}
+# Directories used exactly as configured and handled like the original fixed names (removed and re-created at the start
+# of a run, re-used when that removal fails, never refused for existing): all of them with oracle_common_unique_work_dirs
+# false, and any directory given explicitly (remote_script_directory, remote_output_directory, patch_folder_name or
+# oracle_common_patch_staging_dir), which a later run must be able to use again. Only generated per-run paths are
+# refused when they already exist.
+__oracle_common_run_script_dir_fixed: "{{ (not (__oracle_common_run_unique | bool)) or (remote_script_directory is defined) }}"
+__oracle_common_run_output_fixed: "{{ (not (__oracle_common_run_unique | bool)) or (remote_output_directory is defined) }}"
+__oracle_common_run_staging_fixed: >-
+  {{ (not (__oracle_common_run_unique | bool)) or (oracle_common_patch_staging_dir | default('') | string | length > 0) }}
 # Per database in scope: environment file, working directory (DATABASE_NAME: the output directory itself, as before;
 # the others: <output directory>/<SID>) and owner.
 __oracle_common_run_databases: >-

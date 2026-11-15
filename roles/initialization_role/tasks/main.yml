@@ -4,8 +4,9 @@
 #      oracle_common_run, oracle_common_script_env). With oracle_common_unique_work_dirs (default true) every run has
 #      its own script, output and staging directories, so it never touches another run's or another database's files.
 #   2. Package check, database owner check (every running database in scope), group membership.
-#   3. Create the working directories (refusing one that already exists, recording each so the cleanup removes only
-#      what this run created), stage the scripts, detect the database version and resolve the patch bundle.
+#   3. Create the working directories (refusing a generated per-run directory that already exists, recording each so
+#      the cleanup removes only what this run created; fixed or explicitly given directories are removed and
+#      re-created, as before), stage the scripts, detect the database version and resolve the patch bundle.
 - name: Validate the patch scope and choose this run's working directories
   ansible.builtin.include_role:
     name: oracle_common
@@ -27,10 +28,11 @@
     name: oracle_common
     tasks_from: packages
 
-# Only with the original fixed directory names (oracle_common_unique_work_dirs false): remove the directories of an
-# earlier run, as before. Per-run directories are new by construction, and one that already exists is refused below.
-- name: Remove the working directories of an earlier run (fixed directory names only)
-  when: not (oracle_common_run.unique | bool)
+# Only for directories used like the original fixed names (oracle_common_unique_work_dirs false, or a directory given
+# explicitly: remote_script_directory, remote_output_directory): remove the directories of an earlier run, as before.
+# Generated per-run directories are new by construction, and one that already exists is refused below.
+- name: Remove the working directories of an earlier run (fixed or explicitly given directories only)
+  when: (oracle_common_run.script_dir_fixed | bool) or (oracle_common_run.output_fixed | bool)
   block:
     - name: Init Clean
       ansible.builtin.include_tasks: init_clean.yml
@@ -65,6 +67,7 @@
         __initialization_role_dir: "{{ remote_script_directory }}"
         __initialization_role_dir_owner: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
         __initialization_role_dir_remove: true
+        __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed | bool }}"
 
     - name: Create roles/oracle_database_patch_role/files if not exist
       # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
@@ -82,6 +85,7 @@
         __initialization_role_dir: "{{ oracle_common_run.databases[__initialization_role_sid].work_dir }}"
         __initialization_role_dir_owner: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
         __initialization_role_dir_remove: false
+        __initialization_role_dir_fixed: "{{ oracle_common_run.output_fixed | bool }}"
       loop: "{{ oracle_common_run.scope }}"
       loop_control:
         loop_var: __initialization_role_sid

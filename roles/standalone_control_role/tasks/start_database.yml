@@ -7,9 +7,11 @@
   args:
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
   register: db_start_status
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: sudo
   failed_when: db_start_status.rc != 4 and db_start_status.rc != 0
 

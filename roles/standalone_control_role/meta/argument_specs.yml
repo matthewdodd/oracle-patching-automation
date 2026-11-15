@@ -6,7 +6,7 @@ argument_specs:
     short_description: Start or stop a standalone database, its listener and PDB listener.
     description:
       - startup - rename the alert log, start the database (and open PDBs), check the alert log, start the
-        listener, check the listener logs, start the PDB listener (when sid_server_dict[ORACLE_SID].pdb is set).
+        listener, check the listener logs, start the PDB listener (when the database's sid_server_dict entry has a pdb).
       - shutdown - stop the PDB listener (when pdb is set), the listener and the database, then verify the database
         is down (no ora_pmon_<SID> process). A failed shutdown, a database still running, or a listener that cannot
         be stopped (exit code other than 0 or 4 = already stopped) fails the role.
@@ -40,6 +40,17 @@ argument_specs:
       remote_output_directory:
         type: str
         description: Working (log) directory of this database (set per database by oracle_control_sid.yml).
+      standalone_control_role_sid:
+        type: str
+        description: >-
+          ORACLE_SID as given in the patch scope (set by oracle_control_sid.yml). The sid_server_dict entry is
+          sid_server_dict[ORACLE_SID] as before, else sid_server_dict[standalone_control_role_sid], else the one key that
+          matches without case. Default empty.
+      standalone_control_role_environment:
+        type: dict
+        description: >-
+          Environment of the control scripts (oracle_control_sid.yml passes ORA_ENV_FILE in a patch run, the environment
+          file the shared ORACLE_HOME check validated). Default empty (the scripts use /local/<ORACLE_SID>.env).
       standalone_control_role_shutdown_verify_retries:
         type: raw
         description: >-

@@ -1,0 +1,17 @@
+---
+# Internal expressions of standalone_control_role (not inputs; checked directly by tests/safety_scope.yml).
+
+# The sid_server_dict key of this database: ORACLE_SID (lower-cased by oracle_control_sid.yml) as before, else the SID as
+# given in the scope (standalone_control_role_sid), else the one key that matches ORACLE_SID without case; empty when
+# there is none (or several). The patch playbooks refuse a scope where this finds another entry than the SID as given
+# (oracle_common tasks/preflight_scope.yml), so the start and stop steps use the entry the checks validated.
+__standalone_control_role_sid_key: >-
+  {%- set d = sid_server_dict if sid_server_dict is mapping else {} -%}
+  {%- set given = standalone_control_role_sid | default('') | string -%}
+  {%- set ns = namespace(keys=[]) -%}
+  {%- for k in d if (k | string | lower) == (ORACLE_SID | string | lower) -%}
+  {%-   set ns.keys = ns.keys + [k] -%}
+  {%- endfor -%}
+  {{ ORACLE_SID if ORACLE_SID in d
+     else (given if (given | length > 0 and given in d)
+           else ((ns.keys | first) if (ns.keys | length == 1) else '')) }}

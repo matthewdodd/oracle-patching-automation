@@ -1,20 +1,23 @@
 ---
 # Downloads the patch bundle into the staging directory (temp_dir) and extracts it, as the staging owner (b_user).
-# Per-run directories (oracle_common_run.unique, the default): the staging directory carries "_<run id>", must not exist
-# yet (a path that exists belongs to another run or was planted, and is refused), and is recorded in
+# Per-run directories (oracle_common_run.unique, the default): the generated staging directory carries "_<run id>", must
+# not exist yet (a path that exists belongs to another run or was planted, and is refused), and is recorded in
 # oracle_database_patch_role_created_paths so the cleanup removes it and nothing else. With the original fixed names
-# (oracle_common_unique_work_dirs false) an earlier staging directory is removed first, as before.
+# (oracle_common_unique_work_dirs false) or a staging directory given explicitly (patch_folder_name,
+# oracle_common_patch_staging_dir: oracle_common_run.staging_fixed) an earlier staging directory is removed first, as
+# before, so the next run can use it again.
 - name: Copy files to server
   become: true
   become_user: "{{ b_user }}"
   vars:
-    __oracle_database_patch_role_unique: "{{ oracle_common_run.unique | default(false) | bool }}"
+    __oracle_database_patch_role_unique: >-
+      {{ not (oracle_common_run.staging_fixed | default(not (oracle_common_run.unique | default(false) | bool)) | bool) }}
   block:
     - name: Set the download directory
       ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
         download_dir: "{{ temp_dir }}"
 
-    - name: Remove the prior staging directory (fixed directory names only) {{ temp_dir }}
+    - name: Remove the prior staging directory (fixed or explicitly given directory only) {{ temp_dir }}
       ansible.builtin.file:
         state: absent
         path: "{{ temp_dir }}/"

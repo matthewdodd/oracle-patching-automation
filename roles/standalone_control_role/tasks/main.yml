@@ -13,12 +13,27 @@
         msg: "Please check the inputs entered"
       when: (server_name == "") or (ORACLE_SID == "")
 
+    # The sid_server_dict entry of this database (vars/main.yml: ORACLE_SID, else the SID as given, else the one key
+    # that matches without case).
+    - name: Resolve the sid_server_dict entry of {{ ORACLE_SID }}
+      ansible.builtin.set_fact:
+        standalone_control_role_sid_key: "{{ __standalone_control_role_sid_key }}"
+
+    - name: Fail when the database has no sid_server_dict entry {{ ORACLE_SID }}
+      ansible.builtin.assert:
+        that: standalone_control_role_sid_key | string | length > 0
+        fail_msg: >-
+          sid_server_dict has no (unambiguous) entry for {{ ORACLE_SID }}
+          {{- (' or ' ~ standalone_control_role_sid) if (standalone_control_role_sid | string | length > 0) else '' }}:
+          nothing is started or stopped for it
+        quiet: true
+
     - set_fact:
-        PDB_NAME: "{{ sid_server_dict[ORACLE_SID].pdb }}"
+        PDB_NAME: "{{ sid_server_dict[standalone_control_role_sid_key].pdb }}"
 
     - block:
         - name: Checking if database VIP is pingable
-          shell: ping -c2 {{ sid_server_dict[ORACLE_SID].dbvip }}
+          shell: ping -c2 {{ sid_server_dict[standalone_control_role_sid_key].dbvip }}
           register: vip_ping_log1
 
         - name: Show database VIP ping status
@@ -32,7 +47,7 @@
         path: "{{ remote_output_directory }}"
       delegate_to: "{{ server_name }}"
       become: true
-      become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+      become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
       become_method: sudo
 
 - name: Startup Database

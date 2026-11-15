@@ -15,10 +15,10 @@
   # Written as the database owner: remote_script_directory belongs to that user and is no longer
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: ansible.builtin.sudo
 
-- name: Stop the database listener {{ sid_server_dict[ORACLE_SID].dbListener ~ ' of ' ~ ORACLE_SID ~ ' on ' ~ server_name }}
+- name: Stop the database listener {{ sid_server_dict[standalone_control_role_sid_key].dbListener ~ ' of ' ~ ORACLE_SID ~ ' on ' ~ server_name }}
   ansible.builtin.command:
     argv:
       - "{{ oracle_common_bash_path | default('/usr/bin/bash') }}"
@@ -28,15 +28,17 @@
       - stop_listener
       - "{{ remote_script_directory }}/{{ stop_listener_script }}"
       - "{{ ORACLE_SID }}"
-      - "{{ sid_server_dict[ORACLE_SID].dbListener }}"
+      - "{{ sid_server_dict[standalone_control_role_sid_key].dbListener }}"
       - "{{ remote_output_directory }}/log.{{ stop_listener_script }}"
     expand_argument_vars: false
   delegate_to: "{{ server_name }}"
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
   register: standalone_control_role_listener_stop_status
   changed_when: standalone_control_role_listener_stop_status.rc == 0
   failed_when: standalone_control_role_listener_stop_status.rc not in [0, 4]
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: ansible.builtin.sudo
 
 - name: print listener_stop_status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name

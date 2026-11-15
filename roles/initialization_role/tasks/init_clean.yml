@@ -1,5 +1,9 @@
 ---
+# Removes the script and output directories of an earlier run, as before, but only those used like the original fixed
+# names (oracle_common_run.script_dir_fixed / output_fixed: oracle_common_unique_work_dirs false, or given explicitly).
+# A generated per-run directory is never removed here.
 - name: Remove {{ remote_script_directory }} if exists
+  when: oracle_common_run.script_dir_fixed | default(true) | bool
   block:
     - name: Remove {{ remote_script_directory }} if exists - ansibleUser
       ansible.builtin.file:
@@ -14,6 +18,7 @@
         state: absent
 
 - name: Remove {{ remote_output_directory }} if exists
+  when: oracle_common_run.output_fixed | default(true) | bool
   block:
     - name: Remove {{ remote_output_directory }} if exists - ansibleUser
       ansible.builtin.file:

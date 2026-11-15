@@ -42,3 +42,11 @@ stop_listener_script: listener_ctl.bash
 # oracle_patch_shutdown_verify_retries, oracle_patch_shutdown_verify_delay.
 standalone_control_role_shutdown_verify_retries: "{{ oracle_patch_shutdown_verify_retries | default(12) }}"
 standalone_control_role_shutdown_verify_delay: "{{ oracle_patch_shutdown_verify_delay | default(10) }}"
+
+# ORACLE_SID as given in the patch scope (oracle_control_sid.yml passes it; ORACLE_SID itself is lower-cased, as before).
+# Used to find the sid_server_dict entry when there is none for the lower-case SID. Empty: ORACLE_SID only.
+standalone_control_role_sid: ""
+# Environment of the control scripts. oracle_control_sid.yml passes ORA_ENV_FILE of each database in a patch run (the
+# environment file the shared ORACLE_HOME check validated, oracle_common_run.databases[<SID>].env_file); empty: the
+# scripts' default /local/<ORACLE_SID>.env, as before.
+standalone_control_role_environment: {}

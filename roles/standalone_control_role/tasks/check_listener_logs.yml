@@ -12,14 +12,14 @@
   # Written as the database owner: remote_script_directory belongs to that user and is no longer
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: ansible.builtin.sudo
 
 
 - name: Checking listener logs for errors for {{ ORACLE_SID }}
   vars:
-    listenerA: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
-    listenerB: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"
+    listenerA: "{{ sid_server_dict[standalone_control_role_sid_key].dbListener }}"
+    listenerB: "{{ sid_server_dict[standalone_control_role_sid_key].pdbListener }}"
   shell: >
     {{remote_script_directory}}/{{check_listenerLogs_script}}
     {{ORACLE_SID}} {{listenerA}} {{listenerB}}
@@ -27,9 +27,11 @@
   args:
     executable: /usr/bin/bash
   delegate_to: "{{ server_name }}"
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
   register: check_listenerLogs_status
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: sudo
   failed_when: check_listenerLogs_status.rc != 4 and check_listenerLogs_status.rc != 0
 

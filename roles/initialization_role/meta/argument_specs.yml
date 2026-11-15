@@ -10,7 +10,9 @@ argument_specs:
         preflight_work_dirs.yml, sets oracle_common_run and oracle_common_script_env). With oracle_common_unique_work_dirs
         (alias oracle_patch_unique_work_dirs, default true) the script, output and staging directories carry
         "_<run id>", must not exist yet, and are recorded (initialization_role_created_paths) so the cleanup removes only
-        what this run created; with false the original fixed names are removed and re-created as before.
+        what this run created; with false the original fixed names are removed and re-created as before. A directory
+        given explicitly (remote_script_directory, remote_output_directory, patch_folder_name) is used exactly and handled
+        like the fixed names (removed and re-created every run), so the next run can use it again.
       - Checks the prerequisite packages of the OS release (oracle_common packages.yml), verifies (exact process name)
         that sid_server_dict[<SID>].dbowner owns every running database in scope (DATABASE_NAME must be running), adds the
         database owner and the patch staging owner to oracle_common_group_name (when

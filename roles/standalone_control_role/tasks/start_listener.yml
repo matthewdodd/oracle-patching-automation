@@ -1,18 +1,20 @@
 ---
 ## This script starts the listener
 
-- name: Start listener {{ sid_server_dict[ORACLE_SID].dbListener }} in {{ ORACLE_SID }} on {{ server_name }}
+- name: Start listener {{ sid_server_dict[standalone_control_role_sid_key].dbListener }} in {{ ORACLE_SID }} on {{ server_name }}
   vars:
-    LISTENER: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
+    LISTENER: "{{ sid_server_dict[standalone_control_role_sid_key].dbListener }}"
   shell:
     executable: /usr/bin/bash
     cmd: >
       {{ remote_script_directory }}/listener_ctl.bash start {{ ORACLE_SID }} {{ LISTENER }}
       &> >(tee {{ remote_output_directory }}/log.{{ start_listener_script }}.`date +"%Y.%m.%d"`)
   delegate_to: "{{ server_name }}"
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
   register: listener_start_status
   become: true
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
   become_method: sudo
   failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0
 
