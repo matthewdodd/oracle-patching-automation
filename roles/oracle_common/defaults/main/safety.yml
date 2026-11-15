@@ -31,6 +31,14 @@ oracle_common_env_glob: "{{ oracle_common_env_dir }}/*.env"
 # Shell that reads ORACLE_HOME from an environment file (the bundled scripts use /usr/bin/bash).
 oracle_common_bash_path: /usr/bin/bash
 
+# --- Environment file owner -------------------------------------------------------------------------------------
+# The bundled scripts source <SID>.env only when it is owned by the user running them (the database owner) or root and
+# is not world-writable. true: also accept an environment file owned by another account (the scripts get
+# ORA_ENV_FILE_ALLOW_ANY_OWNER=true: database_version.bash, the prerequisite and patch steps, and the start and stop
+# scripts of standalone_control_role). A world-writable file is always refused. Opt-in, knowingly: whoever owns the
+# file decides what the database owner runs. Alias: oracle_patch_env_file_allow_any_owner.
+oracle_common_env_file_allow_any_owner: "{{ oracle_patch_env_file_allow_any_owner | default(false) }}"
+
 # --- Patch already applied --------------------------------------------------------------------------------------
 # A patch already applied in every database in scope (database_patch.bash status exit code 2) ends the run
 # successfully with the "unneeded" notification, without stopping anything. true restores the original outcome: the
@@ -166,11 +174,12 @@ __oracle_common_preflight_scope_checks:
       oracle_common_patch_databases (alias oracle_patch_databases): the databases of one ORACLE_HOME must have the same
       dbowner (the owner of the home, who applies the patch); got {{ __oracle_common_scope_owners | join(', ') }}
   - failed: >-
-      {{ [oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs]
+      {{ [oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs,
+          oracle_common_env_file_allow_any_owner]
          | reject('boolean') | map('string') | map('lower') | reject('in', __oracle_common_bool_strings) | list | length > 0 }}
     msg: >-
-      oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs
-      (aliases oracle_patch_*): must be true or false
+      oracle_common_allow_shared_home_partial, oracle_common_fail_when_already_applied, oracle_common_unique_work_dirs,
+      oracle_common_env_file_allow_any_owner (aliases oracle_patch_*): must be true or false
   - failed: >-
       {{ (oracle_common_run_id | string | length > 0) and not ((oracle_common_run_id | string) is match(__oracle_common_re_run_id)) }}
     msg: >-
@@ -259,7 +268,12 @@ __oracle_common_run_staging_dir: >-
 # --- Script environment (tasks/preflight_work_dirs.yml, tasks/preflight_script_env.yml) ----------------------------
 # Inputs the bundled scripts read from their environment, per database in scope (all optional for the scripts; their
 # defaults reproduce the original behaviour). ORA_ENV_GLOB is passed on by database_patch.bash apply_home to
-# home_inventory.bash (its own check that no database of the home still runs). Input: oracle_common_run.
+# home_inventory.bash (its own check that no database of the home still runs). ORA_ENV_FILE_ALLOW_ANY_OWNER is set
+# ('true') only with oracle_common_env_file_allow_any_owner. Input: oracle_common_run.
+__oracle_common_env_file_allow_any_owner: >-
+  {{ (oracle_common_env_file_allow_any_owner | string | lower) in __oracle_common_true_strings }}
+__oracle_common_env_file_owner_env: >-
+  {{ {'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'} if (__oracle_common_env_file_allow_any_owner | bool) else {} }}
 __oracle_common_run_script_env: >-
   {%- set ns = namespace(out={}) -%}
   {%- for sid, db in (oracle_common_run.databases | default({})).items() -%}
@@ -267,7 +281,8 @@ __oracle_common_run_script_env: >-
                                             'ORA_ORATAB': oracle_common_oratab | string,
                                             'ORA_ENV_GLOB': oracle_common_env_glob | string}
                                            | combine({'ORA_OPATCH_BACKUP_DIR': oracle_common_opatch_backup_dir | string}
-                                                     if (oracle_common_opatch_backup_dir | string | length > 0) else {})}) -%}
+                                                     if (oracle_common_opatch_backup_dir | string | length > 0) else {})
+                                           | combine(__oracle_common_env_file_owner_env)}) -%}
   {%- endfor -%}
   {{ ns.out }}
 

@@ -57,7 +57,8 @@ argument_specs:
         type: dict
         description: >-
           Environment of the control scripts (oracle_control_sid.yml passes ORA_ENV_FILE in a patch run, the environment
-          file the shared ORACLE_HOME check validated). Default empty (the scripts use /local/<ORACLE_SID>.env).
+          file the shared ORACLE_HOME check validated, and ORA_ENV_FILE_ALLOW_ANY_OWNER=true with
+          oracle_common_env_file_allow_any_owner). Default empty (the scripts use /local/<ORACLE_SID>.env).
       standalone_control_role_shutdown_verify_retries:
         type: raw
         description: >-

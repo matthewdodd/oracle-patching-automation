@@ -5,7 +5,9 @@
 # oracle_common_patch_databases; just DATABASE_NAME when included outside a patch run). Each database uses its own
 # listeners (sid_server_dict) and logs into its own working directory. As before, the role receives the SID in lower
 # case (ORACLE_SID) and runs on server_name; it also receives the SID as given (standalone_control_role_sid, for the
-# sid_server_dict lookup) and, in a patch run, the environment file of the database (ORA_ENV_FILE).
+# sid_server_dict lookup) and, in a patch run, the environment file of the database (ORA_ENV_FILE). With
+# oracle_common_env_file_allow_any_owner (alias oracle_patch_env_file_allow_any_owner; true or false, also the strings
+# "true" / "false") the control scripts also get ORA_ENV_FILE_ALLOW_ANY_OWNER=true, in a patch run and outside one.
 # server_name is the current host (inventory_hostname). It used to be the whole target string, so with several targets
 # (target=a,b) every host delegated to the non-existent host "a,b"; with one target it is the same host as before.
 
@@ -22,6 +24,19 @@
     oracle_control_sid_env_files: >-
       {{ dict((oracle_common_run | default({})).databases | default({}) | dict2items | map(attribute='key')
               | zip((oracle_common_run | default({})).databases | default({}) | dict2items | map(attribute='value.env_file'))) }}
+    # Environment of the control scripts per database: ORA_ENV_FILE in a patch run, ORA_ENV_FILE_ALLOW_ANY_OWNER when
+    # the opt-in is set (defaults written out, so this also works where oracle_common is not loaded).
+    oracle_control_sid_environments: >-
+      {%- set any_owner = ((oracle_common_env_file_allow_any_owner | default(oracle_patch_env_file_allow_any_owner | default(false)))
+                           | string | lower) in (__oracle_common_true_strings | default(['true', 'yes', 'on', '1', 'y'])) -%}
+      {%- set dbs = (oracle_common_run | default({})).databases | default({}) -%}
+      {%- set ns = namespace(out={}) -%}
+      {%- for sid in (oracle_common_run | default({})).scope | default([DATABASE_NAME]) -%}
+      {%-   set env_file = (dbs[sid] | default({})).env_file | default('') | string -%}
+      {%-   set ns.out = ns.out | combine({sid: ({'ORA_ENV_FILE': env_file} if (env_file | length > 0) else {})
+                                              | combine({'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'} if any_owner else {})}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
 
 # Before the first database is started or stopped: every database in scope must have the sid_server_dict entry the
 # control role looks up (the lower-case ORACLE_SID, else the SID as given), so a missing entry can never leave the run
@@ -54,12 +69,11 @@
         control_command: "{{ control }}"
         ORACLE_SID: "{{ oracle_control_sid_item | lower }}"  # noqa: var-naming[pattern] - original variable name of the role
         remote_output_directory: "{{ oracle_control_sid_work_dirs[oracle_control_sid_item] }}"
-        # The SID as given (sid_server_dict lookup when there is no lower-case entry) and, in a patch run, the
-        # environment file the shared ORACLE_HOME check validated for it.
+        # The SID as given (sid_server_dict lookup when there is no lower-case entry) and the script environment: in a
+        # patch run the environment file the shared ORACLE_HOME check validated for it (ORA_ENV_FILE), and
+        # ORA_ENV_FILE_ALLOW_ANY_OWNER with oracle_common_env_file_allow_any_owner.
         standalone_control_role_sid: "{{ oracle_control_sid_item }}"
-        standalone_control_role_environment: >-
-          {{ {'ORA_ENV_FILE': oracle_control_sid_env_files[oracle_control_sid_item]}
-             if (oracle_control_sid_env_files[oracle_control_sid_item] | default('') | length > 0) else {} }}
+        standalone_control_role_environment: "{{ oracle_control_sid_environments[oracle_control_sid_item] | default({}) }}"
       loop: "{{ oracle_control_sid_databases }}"
       loop_control:
         loop_var: oracle_control_sid_item

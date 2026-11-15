@@ -49,6 +49,15 @@ argument_specs:
         description: >-
           Number of checks (alias oracle_patch_poll_retries). Default timeout / delay; retries x delay may not exceed
           the timeout.
+      oracle_common_env_file_allow_any_owner:
+        type: raw
+        description: >-
+          true (or the strings "true" / "false") also accepts a <SID>.env environment file owned by another account
+          than the database owner or root: the bundled scripts get ORA_ENV_FILE_ALLOW_ANY_OWNER=true. A world-writable
+          file is always refused. Alias oracle_patch_env_file_allow_any_owner. Default false.
+      oracle_patch_env_file_allow_any_owner:
+        type: raw
+        description: Short alias of oracle_common_env_file_allow_any_owner.
   run_prereq:
     short_description: Download and stage the patch, then run the prerequisite checks.
     description:
@@ -73,6 +82,15 @@ argument_specs:
         description: >-
           true restores the original outcome for a patch already applied everywhere (the "unneeded" notification,
           then the run fails). Alias oracle_patch_fail_when_already_applied. Default false (successful skip).
+      oracle_common_env_file_allow_any_owner:
+        type: raw
+        description: >-
+          true (or the strings "true" / "false") also accepts a <SID>.env environment file owned by another account
+          than the database owner or root: the bundled scripts get ORA_ENV_FILE_ALLOW_ANY_OWNER=true. A world-writable
+          file is always refused. Alias oracle_patch_env_file_allow_any_owner. Default false.
+      oracle_patch_env_file_allow_any_owner:
+        type: raw
+        description: Short alias of oracle_common_env_file_allow_any_owner.
   copy_files_to_server:
     short_description: Download the patch bundle into the staging directory and extract it.
     description:

@@ -42,7 +42,8 @@ and migrating existing job templates".
 - **Working directories** default to `<oracle_common_patch_base_dir_oracle>/ansible_patch_work` (was `/tmp`), per
   run (`_<run id>` suffix). The database owner must be able to create the base, or set `oracle_common_staging_base`.
 - The bundled scripts source a `<SID>.env` file only when it is owned by the database owner or root and not
-  world-writable (script toggle `ORA_ENV_FILE_ALLOW_ANY_OWNER`).
+  world-writable (`oracle_common_env_file_allow_any_owner: true`, alias `oracle_patch_env_file_allow_any_owner`, also
+  accepts another owner; a world-writable file is always refused).
 
 ### Behaviour changes (each with the way back where one exists)
 
@@ -72,6 +73,7 @@ and migrating existing job templates".
 | A notification failure never fails the run (the start card used to abort the run). | U1N | none |
 | OPatch "succeeded" is accepted on AIX too (only "completed with warnings" was). | SH | none (bug fix) |
 | An unknown `database_patch.bash` mode exits 64 (was 0). | SH | none (bug fix) |
+| The scripts source a `<SID>.env` only when it is owned by the database owner or root (any owner used to be sourced); a world-writable file is refused. | SH, U2 | `oracle_common_env_file_allow_any_owner: true` (alias `oracle_patch_env_file_allow_any_owner`; the strings `"true"` / `"false"` are accepted) for another owner; no way back for a world-writable file |
 | The control scripts in a patch run source the environment file of the SID as given (`<env dir>/<SID>.env`, the file `database_patch.bash` always used) instead of `/local/<lower-case SID>.env`; identical for lower-case SIDs. | U2 | name the files in lower case, or set `oracle_common_env_file` |
 
 ### Added
@@ -100,7 +102,9 @@ and migrating existing job templates".
 - **U2**: shared ORACLE_HOME detection and refusal before anything is stopped; multi-database runs on one home
   (`oracle_patch_databases`: stop all, apply the home once, datapatch per database, start all); opt-in
   `oracle_patch_allow_shared_home_partial` for stopped out-of-scope databases; shutdown verification; exact
-  database owner check; per-run working directories; configurable patch timeout and polling.
+  database owner check; per-run working directories; configurable patch timeout and polling;
+  `oracle_common_env_file_allow_any_owner` (alias `oracle_patch_env_file_allow_any_owner`) passes
+  `ORA_ENV_FILE_ALLOW_ANY_OWNER=true` to every bundled script, patch and start/stop alike.
 - **U3**: required checksum and TLS on the download, optional CA bundle, proxy and Vault repository credentials
   (`vault_patch_repo_username` / `vault_patch_repo_password`); `oracle_common_dir_mode`, `oracle_common_file_mode`,
   `oracle_common_work_group`, `oracle_common_group_membership_become_user`; PATH clean-up after sourcing an
@@ -165,6 +169,6 @@ and migrating existing job templates".
   repository folders, README patterns and datapatch mode to confirm.
 - Script-only toggles not yet exposed by the playbooks: `ORA_OPATCH_UPGRADE`, `ORA_STATUS_STARTUP` (prerequisite-only
   runs still upgrade OPatch, run utlrp and start a database that is not open, as before),
-  `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, `ORA_ENV_FILE_ALLOW_ANY_OWNER`, explicit patch ids.
+  `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, explicit patch ids.
 - The prerequisite playbook still sends the "patching" cards (the `prereq` states exist but are unused, as before).
 - Real-host validation on RHEL 8/9/10 and AIX, and the Molecule scenarios in CI.

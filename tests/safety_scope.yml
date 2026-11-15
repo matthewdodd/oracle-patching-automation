@@ -64,6 +64,10 @@
       - name: non-boolean toggles
         set: {oracle_common_allow_shared_home_partial: maybe, oracle_common_unique_work_dirs: "2"}
         errors: ["must be true or false"]
+      - name: non-boolean environment file owner toggle
+        set: {oracle_common_env_file_allow_any_owner: "always"}
+        errors: ["oracle_common_env_file_allow_any_owner (aliases oracle_patch_*): must be true or false"]
+      - {name: legacy string environment file owner toggle, set: {oracle_common_env_file_allow_any_owner: "true"}, scope: [ORCL01]}
       - {name: legacy boolean strings, set: {oracle_common_fail_when_already_applied: "yes", oracle_common_unique_work_dirs: "false"}, scope: [ORCL01]}
       - {name: invalid run id, set: {oracle_common_run_id: "../x"}, errors: ["oracle_common_run_id"]}
       - {name: run id with a trailing newline, set: {oracle_common_run_id: "r1\n"}, errors: ["oracle_common_run_id"]}
@@ -100,6 +104,9 @@
           - oracle_common_unique_work_dirs | bool
           - not (oracle_common_fail_when_already_applied | bool)
           - not (oracle_common_allow_shared_home_partial | bool)
+          - not (oracle_common_env_file_allow_any_owner | bool)
+          - not (__oracle_common_env_file_allow_any_owner | bool)
+          - __oracle_common_env_file_owner_env == {}
           - oracle_common_oratab == '/etc/oratab'
           - oracle_common_env_glob == '/local/*.env'
           - oracle_common_opatch_backup_dir == ''
@@ -116,6 +123,8 @@
           - oracle_common_patch_databases == 'ORCL01,ORCL02'
           - oracle_common_allow_shared_home_partial == true
           - oracle_common_fail_when_already_applied == 'true'
+          - oracle_common_env_file_allow_any_owner == 'true'
+          - "__oracle_common_env_file_owner_env == {'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'}"
           - oracle_common_unique_work_dirs == false
           - oracle_common_run_id == 'r42'
           - oracle_common_oratab == '/var/opt/oracle/oratab'
@@ -130,6 +139,7 @@
         oracle_patch_databases: "ORCL01,ORCL02"
         oracle_patch_allow_shared_home_partial: true
         oracle_patch_fail_when_already_applied: "true"
+        oracle_patch_env_file_allow_any_owner: "true"
         oracle_patch_unique_work_dirs: false
         oracle_patch_run_id: r42
         oracle_patch_oratab: /var/opt/oracle/oratab
@@ -161,6 +171,7 @@
         oracle_common_allow_shared_home_partial: "{{ item.set.oracle_common_allow_shared_home_partial | default(false) }}"
         oracle_common_fail_when_already_applied: "{{ item.set.oracle_common_fail_when_already_applied | default(false) }}"
         oracle_common_unique_work_dirs: "{{ item.set.oracle_common_unique_work_dirs | default(true) }}"
+        oracle_common_env_file_allow_any_owner: "{{ item.set.oracle_common_env_file_allow_any_owner | default(false) }}"
         oracle_common_run_id: "{{ item.set.oracle_common_run_id | default('') }}"
         oracle_common_patch_timeout: "{{ item.set.oracle_common_patch_timeout | default(14400) }}"
         oracle_common_patch_poll_delay: "{{ item.set.oracle_common_patch_poll_delay | default(120) }}"
@@ -251,6 +262,51 @@
           ORA_ORATAB: /etc/oratab
           ORA_ENV_GLOB: /local/*.env
           ORA_OPATCH_BACKUP_DIR: /u01/opatch_backup
+
+    # ORA_ENV_FILE_ALLOW_ANY_OWNER: absent by default (the exact environments above), 'true' for every database with
+    # the opt-in (alias with the legacy string, then the oracle_common_* name as a boolean), absent again with false.
+    - name: Run tasks/preflight_work_dirs.yml (environment files of any owner accepted, alias as a string)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        oracle_patch_env_file_allow_any_owner: "true"
+
+    - name: Check every database in scope gets ORA_ENV_FILE_ALLOW_ANY_OWNER=true
+      ansible.builtin.assert:
+        that:
+          - oracle_common_script_env.ORCL01.ORA_ENV_FILE_ALLOW_ANY_OWNER == 'true'
+          - oracle_common_script_env.ORCL02.ORA_ENV_FILE_ALLOW_ANY_OWNER == 'true'
+          - "oracle_common_script_env.ORCL01 == expected_env_orcl01 | combine({'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'})"
+        fail_msg: "unexpected: {{ oracle_common_script_env }}"
+      vars:
+        expected_env_orcl01:
+          ORA_ENV_FILE: /local/ORCL01.env
+          ORA_WORK_DIR: /u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1
+          ORA_ORATAB: /etc/oratab
+          ORA_ENV_GLOB: /local/*.env
+          ORA_OPATCH_BACKUP_DIR: /u01/opatch_backup
+
+    - name: Run tasks/preflight_work_dirs.yml (oracle_common_env_file_allow_any_owner as a boolean)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        oracle_common_env_file_allow_any_owner: true
+
+    - name: Check the boolean opt-in sets ORA_ENV_FILE_ALLOW_ANY_OWNER=true
+      ansible.builtin.assert:
+        that: oracle_common_script_env | dict2items | map(attribute='value.ORA_ENV_FILE_ALLOW_ANY_OWNER', default='') | list == ['true', 'true']
+        fail_msg: "unexpected: {{ oracle_common_script_env }}"
+
+    - name: Run tasks/preflight_work_dirs.yml (opt-in explicitly false, legacy string)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        oracle_patch_env_file_allow_any_owner: "false"
+
+    - name: Check ORA_ENV_FILE_ALLOW_ANY_OWNER is absent with the opt-in false
+      ansible.builtin.assert:
+        that: oracle_common_script_env | dict2items | selectattr('value.ORA_ENV_FILE_ALLOW_ANY_OWNER', 'defined') | list == []
+        fail_msg: "unexpected: {{ oracle_common_script_env }}"
 
     - name: Check the staging directory of the run
       ansible.builtin.assert:

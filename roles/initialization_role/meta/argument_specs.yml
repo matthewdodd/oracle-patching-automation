@@ -50,3 +50,12 @@ argument_specs:
       oracle_common_run_id:
         type: raw
         description: Run id appended to the working directories (alias oracle_patch_run_id). Default generated.
+      oracle_common_env_file_allow_any_owner:
+        type: raw
+        description: >-
+          true (or the strings "true" / "false") also accepts a <SID>.env environment file owned by another account
+          than the database owner or root: the bundled scripts get ORA_ENV_FILE_ALLOW_ANY_OWNER=true. A world-writable
+          file is always refused. Alias oracle_patch_env_file_allow_any_owner. Default false.
+      oracle_patch_env_file_allow_any_owner:
+        type: raw
+        description: Short alias of oracle_common_env_file_allow_any_owner.

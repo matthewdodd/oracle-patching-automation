@@ -306,6 +306,7 @@ group- or world-writable modes are rejected. 0777 is not allowed anywhere (no to
 | `oracle_common_oratab` | `/etc/oratab` | Alias `oracle_patch_oratab` (`ORA_ORATAB`). |
 | `oracle_common_env_glob` | `<env dir>/*.env` | Environment files read for their ORACLE_HOME (`ORA_ENV_GLOB`). |
 | `oracle_common_bash_path` | `/usr/bin/bash` | Shell that reads ORACLE_HOME from an environment file. |
+| `oracle_common_env_file_allow_any_owner` | `false` | Alias `oracle_patch_env_file_allow_any_owner` (`true` / `false`, also as strings). Opt-in: the scripts also source a `<SID>.env` owned by another account than the database owner or root (`ORA_ENV_FILE_ALLOW_ANY_OWNER=true` for the patch, version and start/stop scripts); a world-writable file is always refused. |
 | `oracle_common_fail_when_already_applied` | `false` | Alias `oracle_patch_fail_when_already_applied`. See [Patch already applied](#patch-already-applied). |
 | `oracle_common_unique_work_dirs` | `true` | Alias `oracle_patch_unique_work_dirs`. See [Working directories](#working-directories-and-cleanup). |
 | `oracle_common_run_id` | generated | Alias `oracle_patch_run_id`. `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`; default `<AAP job id>_<UTC time>_<8 hex>`. |
@@ -423,11 +424,12 @@ playbooks for compatibility. The inputs among them (`remote_*_directory`, `patch
 
 ### Script-only settings
 
-`database_patch.bash` also reads `ORA_ENV_FILE_ALLOW_ANY_OWNER`, `ORA_DB_PATCH_ID`, `ORA_JVM_PATCH_ID`, `ORA_OPATCH_UPGRADE`, `ORA_STATUS_STARTUP`,
+`database_patch.bash` also reads `ORA_DB_PATCH_ID`, `ORA_JVM_PATCH_ID`, `ORA_OPATCH_UPGRADE`, `ORA_STATUS_STARTUP`,
 `ORA_APPLY_JVM`, `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, `ORA_UTLRP_MAX_RETRIES`, `ORA_PS_EXCLUDE_PATTERN` and others
 (listed in its header); their defaults reproduce the original behaviour. The playbooks do not set them yet: the
-playbooks pass `ORA_ENV_FILE`, `ORA_WORK_DIR`, `ORA_ORATAB`, `ORA_ENV_GLOB`, `ORA_OPATCH_BACKUP_DIR` (when set) and the
-per-version `ORA_DB_RU_PATTERN`, `ORA_JVM_RU_PATTERN`, `ORA_JVM_MIN_MATCHES` and `ORA_DATAPATCH_STARTUP_MODE`.
+playbooks pass `ORA_ENV_FILE`, `ORA_WORK_DIR`, `ORA_ORATAB`, `ORA_ENV_GLOB`, `ORA_OPATCH_BACKUP_DIR` (when set),
+`ORA_ENV_FILE_ALLOW_ANY_OWNER` (with `oracle_common_env_file_allow_any_owner`) and the per-version
+`ORA_DB_RU_PATTERN`, `ORA_JVM_RU_PATTERN`, `ORA_JVM_MIN_MATCHES` and `ORA_DATAPATCH_STARTUP_MODE`.
 
 ## Shared ORACLE_HOME
 
@@ -551,7 +553,7 @@ message. A failed check sends the red card and stops the run before any host is 
 | Modes | scripts 0750, directories 0750, bundle 0640, extracted tree `u=rwX,g=rX,o=` | Group/world-writable modes rejected; 0777 removed (no toggle). |
 | Working directories | private base under the Oracle base, per run | `/tmp` only when set explicitly (warning). |
 | Inputs | anchored `\A..\Z` patterns, `..` path components rejected, `"<CHANGE_ME>"` rejected | |
-| Environment files | sourced only when owned by the user running the script (the database owner) or root and not world-writable; an empty, `.` or relative PATH entry is dropped after sourcing | `ORA_ENV_FILE_ALLOW_ANY_OWNER=true` (script environment only, not set by the playbooks). |
+| Environment files | sourced only when owned by the user running the script (the database owner) or root and not world-writable; an empty, `.` or relative PATH entry is dropped after sourcing | `oracle_common_env_file_allow_any_owner: true` (alias `oracle_patch_env_file_allow_any_owner`) accepts another owner; a world-writable file is always refused. |
 
 ## AAP usage and migrating existing job templates
 

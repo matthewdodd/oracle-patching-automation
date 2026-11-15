@@ -64,5 +64,6 @@ standalone_control_role_shutdown_verify_delay: "{{ oracle_patch_shutdown_verify_
 standalone_control_role_sid: ""
 # Environment of the control scripts. oracle_control_sid.yml passes ORA_ENV_FILE of each database in a patch run (the
 # environment file the shared ORACLE_HOME check validated, oracle_common_run.databases[<SID>].env_file); empty: the
-# scripts' default /local/<ORACLE_SID>.env, as before.
+# scripts' default /local/<ORACLE_SID>.env, as before. It also passes ORA_ENV_FILE_ALLOW_ANY_OWNER=true, in a patch run
+# and outside one, when oracle_common_env_file_allow_any_owner (alias oracle_patch_env_file_allow_any_owner) is true.
 standalone_control_role_environment: {}
