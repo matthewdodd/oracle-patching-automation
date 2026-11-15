@@ -15,6 +15,9 @@
 # 3. A generated per-run directory that already exists is neither removed by init_clean.yml nor accepted by run_dir.yml.
 # 4. Structure: initialization_role passes the fixed flags to run_dir.yml and init_clean.yml; the staging directory
 #    refusal of copy_files_to_server.yml applies only to a generated staging directory.
+# 5. The parent directory (run_dir.yml): a missing parent (first run on a fresh host, e.g. the default
+#    oracle_common_staging_base) is created with oracle_common_dir_mode and the run goes on; a world-writable parent
+#    without the sticky bit is refused; a world-writable parent with it (like /tmp) is accepted with the warning.
 - name: Explicitly given working directories regression test
   hosts: localhost
   connection: local
@@ -298,6 +301,99 @@
                   - wd_planted.stat.isdir | default(false)
                   - "'gen_scripts_r3 already exists' in ansible_failed_result.msg | default('')"
                 fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        # --- 5. The parent directory --------------------------------------------------------------------------------
+        - name: Create a directory whose parent does not exist yet (first run on a fresh host)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/initialization_role"
+            tasks_from: run_dir
+          vars:
+            initialization_role_created_paths: []
+            oracle_common_modes: {script: "0750", dir: "0750", file: "0640"}
+            __initialization_role_dir: "{{ wd_tmp.path }}/fresh_base/scripts_r5"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+            __initialization_role_dir_fixed: false
+
+        - name: Read the created directory and its new parent
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+            get_checksum: false
+          register: wd_fresh
+          loop:
+            - "{{ wd_tmp.path }}/fresh_base"
+            - "{{ wd_tmp.path }}/fresh_base/scripts_r5"
+
+        - name: Check the missing parent was created with oracle_common_dir_mode and the run went on
+          ansible.builtin.assert:
+            that:
+              - wd_fresh.results | map(attribute='stat.isdir') | list == [true, true]
+              - wd_fresh.results | map(attribute='stat.mode') | list == ['0750', '0750']
+              - not __initialization_role_parent_world_writable
+            fail_msg: "unexpected: {{ wd_fresh.results | map(attribute='stat') | list }}"
+
+        - name: Create a world-writable parent without the sticky bit and one with it
+          ansible.builtin.file:
+            path: "{{ wd_tmp.path }}/{{ item.name }}"
+            state: directory
+            mode: "{{ item.mode }}"
+          loop:
+            - {name: open_base, mode: "0777"}
+            - {name: sticky_base, mode: "1777"}
+
+        - name: Refuse a world-writable parent without the sticky bit
+          block:
+            - name: Use a directory under the world-writable parent (must fail)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ playbook_dir }}/../roles/initialization_role"
+                tasks_from: run_dir
+              vars:
+                initialization_role_created_paths: []
+                __initialization_role_dir: "{{ wd_tmp.path }}/open_base/scripts_r5"
+                __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+                __initialization_role_dir_remove: true
+                __initialization_role_dir_fixed: false
+            - name: Fail the test (the world-writable parent was accepted)
+              ansible.builtin.fail:
+                msg: "run_dir.yml accepted a world-writable parent directory without the sticky bit"
+          rescue:
+            - name: Check the refusal names the parent and its mode and nothing was created
+              ansible.builtin.stat:
+                path: "{{ wd_tmp.path }}/open_base/scripts_r5"
+              register: wd_open_child
+
+            - name: Assert the refusal
+              ansible.builtin.assert:
+                that:
+                  - "'world-writable without the sticky bit (mode 0777)' in ansible_failed_result.msg | default('')"
+                  - not wd_open_child.stat.exists
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        - name: Accept a world-writable parent with the sticky bit (like /tmp), with the warning
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ playbook_dir }}/../roles/initialization_role"
+            tasks_from: run_dir
+          vars:
+            initialization_role_created_paths: []
+            __initialization_role_dir: "{{ wd_tmp.path }}/sticky_base/scripts_r5"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+            __initialization_role_dir_fixed: false
+
+        - name: Read the directory under the sticky parent
+          ansible.builtin.stat:
+            path: "{{ wd_tmp.path }}/sticky_base/scripts_r5"
+            follow: false
+          register: wd_sticky_child
+
+        - name: Check the directory was created and the warning condition held
+          ansible.builtin.assert:
+            that:
+              - wd_sticky_child.stat.isdir | default(false)
+              - __initialization_role_parent_world_writable | bool
+              - __initialization_role_parent_sticky | bool
+            fail_msg: "unexpected: {{ wd_sticky_child.stat }}"
       always:
         - name: Remove the temporary directory
           ansible.builtin.file:

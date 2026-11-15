@@ -46,7 +46,7 @@
     that: not (__initialization_role_parent_world_writable and not __initialization_role_parent_sticky)
     fail_msg: >-
       {{ __initialization_role_dir | dirname }} (parent of {{ __initialization_role_dir }}) is world-writable without the
-      sticky bit (mode {{ __initialization_role_dir_parent.stat.mode }}): any local user could replace the working
+      sticky bit (mode {{ __initialization_role_dir_parent.stat.mode | default('n/a') }}): any local user could replace the working
       directory. Choose another oracle_common_staging_base (or remote_script_directory / remote_output_directory).
     quiet: true
 
