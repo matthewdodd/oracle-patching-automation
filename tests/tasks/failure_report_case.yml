@@ -1,0 +1,86 @@
+---
+# One failure report case for tests/failure_report.yml (include variable failure_case):
+#   name, stage, error (message of the failing task), progress (oracle_common_progress), run (oracle_common_run),
+#   cleanup (oracle_common_failure_cleanup_done), call (notification state), expect / reject (text the report must or
+#   must not contain), record_first (record the failure, then let a cleanup with its own failure run before the report).
+# Every case resets the failure record, the state and the notification state to sentinels first.
+- name: Reset the failure record and the progress ({{ failure_case.name }})
+  ansible.builtin.set_fact:
+    oracle_common_failure: {}
+    oracle_common_failure_state: __not_run__
+    oracle_common_progress: "{{ failure_case.progress | default({}) }}"
+    __oracle_common_notify_state: __not_run__
+    fr_report: __not_run__
+
+- name: Run the failing stage and its rescue ({{ failure_case.name }})
+  block:
+    - name: Fail a stage the way a playbook stage fails ({{ failure_case.name }})
+      block:
+        - name: Original failing task ({{ failure_case.name }})
+          ansible.builtin.command:
+            argv: [sh, -c, "echo first output line; echo last output line >&2; exit 3"]
+          changed_when: false
+          failed_when: true
+      rescue:
+        - name: Record the failure before the cleanup ({{ failure_case.name }})
+          ansible.builtin.include_tasks: oracle_common.yml
+          vars:
+            test_tasks_from: failure_record
+            oracle_common_failure_stage: "{{ failure_case.stage }}"
+          when: failure_case.record_first | default(false)
+
+        # A cleanup whose own failure is rescued replaces ansible_failed_task / ansible_failed_result.
+        - name: Run a cleanup that fails and recovers ({{ failure_case.name }})
+          when: failure_case.record_first | default(false)
+          block:
+            - name: Cleanup task that fails ({{ failure_case.name }})
+              ansible.builtin.fail:
+                msg: cleanup error that must not replace the original one
+          rescue:
+            - name: Cleanup recovered ({{ failure_case.name }})
+              ansible.builtin.debug:
+                msg: cleanup recovered
+
+        - name: Report the failure ({{ failure_case.name }})
+          ansible.builtin.include_tasks: oracle_common.yml
+          vars:
+            test_tasks_from: failure_report
+            oracle_common_failure_stage: "{{ failure_case.stage }}"
+            oracle_common_failure_call: "{{ failure_case.call | default('fail') }}"
+            oracle_common_failure_cleanup_done: "{{ failure_case.cleanup | default(false) }}"
+            oracle_common_run: "{{ failure_case.run | default({}) }}"
+
+    - name: Fail the test (the failure report did not fail the host) ({{ failure_case.name }})
+      ansible.builtin.set_fact:
+        fr_report: __report_did_not_fail__
+  rescue:
+    - name: Keep the failure report ({{ failure_case.name }})
+      ansible.builtin.set_fact:
+        fr_report: "{{ ansible_failed_result.msg | default('') }}"
+        fr_failed_task: "{{ ansible_failed_task.name | default('') }}"
+
+- name: Check the failure report ({{ failure_case.name }})
+  ansible.builtin.assert:
+    that:
+      - fr_failed_task == 'Fail with the failure report'
+      - fr_report.startswith(fr_prefix)
+      - "'\n' not in fr_report"
+      # The message's trailing period is not doubled.
+      - "'return code (exit code 3).' in fr_report"
+      - "'Last output: first output line | last output line.' in fr_report"
+      - "'cleanup error' not in fr_report"
+      - failure_case.expect | reject('in', fr_report) | list | length == 0
+      - failure_case.reject | default([]) | select('in', fr_report) | list | length == 0
+      # The same state is shown before the failure (one sentence per item).
+      - oracle_common_failure_state | join('; ') in fr_report
+      # The notification was attempted with the requested state (skipped here: no webhook URL is configured).
+      - __oracle_common_notify_state.text == fr_card_text[failure_case.call | default('fail')]
+    fail_msg: >-
+      case '{{ failure_case.name }}': failed task '{{ fr_failed_task | default('none') }}', report: {{ fr_report }}
+      / missing: {{ failure_case.expect | reject('in', fr_report) | list }}
+      / unexpected: {{ failure_case.reject | default([]) | select('in', fr_report) | list }}
+      / notification state: {{ __oracle_common_notify_state }}
+    quiet: true
+  vars:
+    fr_card_text: {fail: failed, unneeded: "been skipped; unneeded"}
+    fr_prefix: "Fail: {{ failure_case.stage }} failed on localhost in task 'Original failing task"

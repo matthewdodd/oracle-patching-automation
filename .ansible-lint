@@ -1,0 +1,16 @@
+---
+# Target profile for release is "production".
+profile: production
+
+exclude_paths:
+  - .venv/
+  - .ansible/
+  - collections/ansible_collections/
+
+# Used only by ansible-lint's own syntax check of the playbooks: the target plays use
+# hosts: "{{ target | default('') }}", and target is a required job input (play 1 fails without it).
+# A placeholder host from inventory/example keeps the check meaningful; it is never contacted.
+extra_vars:
+  target: dbhost01.example.com
+
+# Fix findings rather than adding skip_list / warn_list entries to make CI green.

@@ -1,0 +1,103 @@
+#!/bin/bash
+#
+# TEST STUB - NOT ORACLE SOFTWARE. Molecule stand-in for <ORACLE_HOME>/bin/lsnrctl (installed by
+# molecule/shared/tasks/fake_home.yml). Usage: lsnrctl <status|start|stop> [<listener name>] (default LISTENER).
+# A listener is a background process "<ORACLE_HOME>/bin/tnslsnr -s <name> -inherit" running <ORACLE_HOME>/bin/tnslsnr
+# (a copy of bash reading a FIFO), so OPatch (the opatch stub) sees it as an active executable of the home, and
+# listener_ctl.bash's process listing finds it. Listener names are case-insensitive (lower-cased), as in lsnrctl.
+set -u
+
+die() {
+  printf '%s\n' "$*"
+  exit 1
+}
+
+# Runs "$@" in the background in its own session when setsid is available (util-linux; the test image installs it),
+# so the process outlives the caller's session; otherwise just in the background.
+detach() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" &
+  else
+    "$@" &
+  fi
+}
+
+pids_of_listener() {
+  ps -e -o pid= -o args= | awk -v want="$1" '{ pid = $1; $1 = ""; sub(/^ +/, ""); if ($0 == want) print pid }'
+}
+
+# Waits up to 10 s until the listener process exists (want=up) or is gone (want=down).
+wait_for() {
+  local want=$1 i
+  for ((i = 0; i < 50; i++)); do
+    if [[ -n $(pids_of_listener "$args") ]]; then
+      [[ $want == up ]] && return 0
+    else
+      [[ $want == down ]] && return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+cmd_status() {
+  if [[ -z $(pids_of_listener "$args") ]]; then
+    echo "TNS-12541: TNS:no listener"
+    return 1
+  fi
+  echo "STATUS of the LISTENER"
+  echo "Alias                     $name"
+  echo "Listener Parameter File   $oracle_home/network/admin/listener.ora"
+  echo "The command completed successfully"
+}
+
+cmd_start() {
+  if [[ -n $(pids_of_listener "$args") ]]; then
+    echo "TNS-01106: Listener using listener name $name has already been started"
+    return 1
+  fi
+  [[ -p $fifo ]] || mkfifo -m 0600 "$fifo" || die "lsnrctl stub: cannot create $fifo"
+  # shellcheck disable=SC2016  # the single-quoted script is expanded by the inner bash
+  detach bash -c 'exec -a "$0" "$0" -s "$1" -inherit <>"$2" >/dev/null 2>&1' "$oracle_home/bin/tnslsnr" "$name" "$fifo"
+  wait_for up || die "lsnrctl stub: listener $name did not start"
+  echo "Starting $oracle_home/bin/tnslsnr: please wait..."
+  echo "The command completed successfully"
+}
+
+cmd_stop() {
+  local pid
+  if [[ -z $(pids_of_listener "$args") ]]; then
+    echo "TNS-12541: TNS:no listener"
+    return 1
+  fi
+  for pid in $(pids_of_listener "$args"); do
+    kill "$pid" 2>/dev/null
+  done
+  wait_for down || die "lsnrctl stub: listener $name did not stop"
+  echo "The command completed successfully"
+}
+
+main() {
+  local cmd=${1:-status} state_dir
+  name=$(printf '%s' "${2:-LISTENER}" | tr '[:upper:]' '[:lower:]')
+  [[ $name =~ ^[a-z][a-z0-9_#.-]*$ ]] || die "TNS-01101: Could not find listener name or service name ${2:-}"
+  oracle_home=$(cd -P -- "$(dirname -- "$0")/.." && pwd -P) || exit 1
+  [[ -n ${ORACLE_BASE:-} ]] || die "lsnrctl stub: ORACLE_BASE must be set"
+  state_dir="$ORACLE_BASE/molecule_state/listeners"
+  [[ -d $state_dir ]] || die "lsnrctl stub: no state directory $state_dir"
+  fifo="$state_dir/bg.fifo"
+  args="$oracle_home/bin/tnslsnr -s $name -inherit"
+  case $cmd in
+    status) cmd_status ;;
+    start) cmd_start ;;
+    stop) cmd_stop ;;
+    *) die "lsnrctl stub: unsupported command $cmd" ;;
+  esac
+}
+
+name=""
+oracle_home=""
+fifo=""
+args=""
+main "$@"
+exit $?

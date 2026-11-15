@@ -1,0 +1,280 @@
+---
+# Patch download regression test for roles/oracle_database_patch_role tasks/copy_files_to_server.yml (U3: required
+# checksum, TLS settings, credentials from variables, no secret in a failure message, least-privilege modes). Runs on
+# the controller only, inside a temporary directory: the "repository" is a file:// URL of a local folder holding a zip
+# bundle, and become is turned off for the play (ansible_become: false overrides the task keyword). Run from the
+# repository root:
+#   ansible-playbook -i localhost, -c local tests/download.yml
+#
+# 1. With the right checksum the bundle is downloaded, extracted and removed; the staging directory gets
+#    oracle_common_modes.dir (0750) and the extracted tree u=rwX,g=rX,o= (0777 is gone): plain files 0640, executable
+#    files and directories 0750, nothing for others. The staging directory is recorded for the cleanup.
+# 2. A wrong checksum fails the run with a message that names the checksum and does not show the repository URL.
+# 3. A failed request does not show the repository credentials or the URL.
+# 4. TLS with a private CA: an https repository (the Molecule fixture molecule/shared/files/https_repository.py, with a
+#    throw-away CA from make_test_tls.bash) is downloaded from when oracle_common_patch_ca_path names the CA, and refused
+#    (certificate not verified) without it. get_url has no ca_path option, so the CA must reach it another way.
+- name: Patch download regression test
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min]
+  vars_files:
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    ansible_become: false
+    oracle_common_modes: {script: "0750", dir: "0750", file: "0640"}
+    oracle_common_work_group: ""
+    oracle_common_patch_validate_certs: true
+    oracle_common_patch_ca_path: ""
+    oracle_common_patch_use_proxy: false
+    oracle_common_patch_proxy: ""
+    oracle_common_patch_repo_username: ""
+    oracle_common_patch_repo_password: ""
+    oracle_common_patch_force_basic_auth: true
+    dl_bundle: LINUX_jan26.zip
+  tasks:
+    - name: Run the download cases
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: download.
+          register: dl_tmp
+
+        - name: Read the current user
+          ansible.builtin.command:
+            argv: [id, -un]
+          register: dl_user
+          changed_when: false
+
+        - name: Create the content and repository folders
+          ansible.builtin.file:
+            path: "{{ dl_tmp.path }}/{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: [content/37960098, repo]
+
+        - name: Create the patch content (a README and an executable script)
+          ansible.builtin.copy:
+            dest: "{{ dl_tmp.path }}/content/37960098/{{ item.name }}"
+            content: "{{ item.content }}"
+            mode: "{{ item.mode }}"
+          loop:
+            - {name: README.html, content: "<html>Database Release Update</html>\n", mode: "0644"}
+            - {name: run.sh, content: "#!/bin/sh\nexit 0\n", mode: "0755"}
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Create the zip bundle in the repository folder
+          ansible.builtin.command:
+            argv: [zip, -q, -r, "{{ dl_tmp.path }}/repo/{{ dl_bundle }}", "37960098"]
+            chdir: "{{ dl_tmp.path }}/content"
+            creates: "{{ dl_tmp.path }}/repo/{{ dl_bundle }}"
+
+        - name: Read the checksum of the bundle
+          ansible.builtin.stat:
+            path: "{{ dl_tmp.path }}/repo/{{ dl_bundle }}"
+            checksum_algorithm: sha256
+          register: dl_bundle_stat
+
+        - name: Set the repository and the run
+          ansible.builtin.set_fact:
+            oracle_common_patch: {repo_dir_url: "file://{{ dl_tmp.path }}/repo"}
+            oracle_common_patch_checksum: "sha256:{{ dl_bundle_stat.stat.checksum }}"
+            oracle_common_run: {id: t1, unique: true}
+            oracle_database_patch_role_created_paths: []
+            b_user: "{{ dl_user.stdout }}"
+
+        # --- 1. right checksum ---------------------------------------------------------------------------------
+        - name: Download and extract the bundle
+          # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: oracle_database_patch_role
+            tasks_from: copy_files_to_server
+          vars:
+            temp_dir: "{{ dl_tmp.path }}/staging_t1"
+            artf_file_name: "{{ dl_bundle }}"
+
+        - name: Read the staged files
+          ansible.builtin.stat:
+            path: "{{ dl_tmp.path }}/staging_t1/{{ item }}"
+          loop: ["", "37960098", "37960098/README.html", "37960098/run.sh", "{{ dl_bundle }}"]
+          register: dl_staged
+
+        - name: Check the modes, the removed bundle and the record (case 1)
+          ansible.builtin.assert:
+            that:
+              - dl_staged.results[0].stat.mode == '0750'
+              - dl_staged.results[1].stat.mode == '0750'
+              - dl_staged.results[2].stat.mode == '0640'
+              - dl_staged.results[3].stat.mode == '0750'
+              - not dl_staged.results[4].stat.exists
+              - oracle_database_patch_role_created_paths | map(attribute='path') | list == [dl_tmp.path ~ '/staging_t1']
+            fail_msg: >-
+              modes {{ dl_staged.results | map(attribute='stat.mode', default='missing') | list }}, bundle left
+              {{ dl_staged.results[4].stat.exists }}, recorded {{ oracle_database_patch_role_created_paths }}
+
+        # --- 2. wrong checksum ---------------------------------------------------------------------------------
+        - name: Download with a wrong checksum
+          block:
+            - name: Run the download with a wrong checksum
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
+                tasks_from: copy_files_to_server
+              vars:
+                temp_dir: "{{ dl_tmp.path }}/staging_t2"
+                artf_file_name: "{{ dl_bundle }}"
+                oracle_common_patch_checksum: "sha256:{{ '0123456789abcdef' * 4 }}"
+
+            - name: Note that the wrong checksum was accepted
+              ansible.builtin.set_fact:
+                dl_wrong_checksum_accepted: true
+          rescue:
+            - name: Keep the failure message (case 2)
+              ansible.builtin.set_fact:
+                dl_wrong_checksum_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+
+        - name: Check the wrong checksum was refused without showing the repository (case 2)
+          ansible.builtin.assert:
+            that:
+              - not (dl_wrong_checksum_accepted | default(false))
+              - dl_wrong_checksum_msg is search('checksum does not match oracle_common_patch_checksum')
+              - (dl_tmp.path ~ '/repo') not in dl_wrong_checksum_msg
+              - "'file://' not in dl_wrong_checksum_msg"
+            fail_msg: "message: {{ dl_wrong_checksum_msg | default('none') }}"
+
+        # --- 3. failed request with credentials ----------------------------------------------------------------
+        - name: Download from an unreachable repository with credentials
+          block:
+            - name: Run the download from an unreachable repository
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
+                tasks_from: copy_files_to_server
+              vars:
+                temp_dir: "{{ dl_tmp.path }}/staging_t3"
+                artf_file_name: "{{ dl_bundle }}"
+                oracle_common_patch: {repo_dir_url: "https://repo_reader:url-secret-42@127.0.0.1:9/oracledatabase/19.0.0"}
+                oracle_common_patch_repo_username: repo_reader
+                oracle_common_patch_repo_password: var-secret-43
+
+            - name: Note that the unreachable repository was accepted
+              ansible.builtin.set_fact:
+                dl_unreachable_accepted: true
+          rescue:
+            - name: Keep the failure message (case 3)
+              ansible.builtin.set_fact:
+                dl_unreachable_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+
+        - name: Check the failure shows no credentials and no URL (case 3)
+          ansible.builtin.assert:
+            that:
+              - not (dl_unreachable_accepted | default(false))
+              - dl_unreachable_msg is search('Download of ' ~ dl_bundle ~ ' failed')
+              - "'url-secret-42' not in dl_unreachable_msg"
+              - "'var-secret-43' not in dl_unreachable_msg"
+              - "'127.0.0.1:9' not in dl_unreachable_msg"
+            fail_msg: "message: {{ dl_unreachable_msg | default('none') }}"
+
+        # --- 4. https repository with a private CA ----------------------------------------------------------------
+        - name: Create a throw-away CA and server certificate for 127.0.0.1
+          ansible.builtin.command:
+            argv: [bash, "{{ playbook_dir }}/../molecule/shared/files/make_test_tls.bash", "{{ dl_tmp.path }}/tls", 127.0.0.1]
+          changed_when: true
+
+        - name: Pick a free local port
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - -c
+              - "import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])"
+          register: dl_port
+          changed_when: false
+
+        - name: Start the https repository in the background
+          ansible.builtin.command:
+            argv:
+              - bash
+              - -c
+              - 'nohup "$@" >/dev/null 2>&1 & echo "$!"'
+              - https_repository
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../molecule/shared/files/https_repository.py"
+              - "{{ dl_tmp.path }}/repo"
+              - 127.0.0.1
+              - "{{ dl_port.stdout }}"
+              - "{{ dl_tmp.path }}/tls/server.crt"
+              - "{{ dl_tmp.path }}/tls/server.key"
+              - "{{ dl_tmp.path }}/access.log"
+          register: dl_server
+          changed_when: true
+
+        - name: Wait for the https repository
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: "{{ dl_port.stdout | int }}"
+            timeout: 30
+
+        - name: Download over https with the CA bundle (case 4)
+          # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: oracle_database_patch_role
+            tasks_from: copy_files_to_server
+          vars:
+            temp_dir: "{{ dl_tmp.path }}/staging_t4"
+            artf_file_name: "{{ dl_bundle }}"
+            oracle_common_patch: {repo_dir_url: "https://127.0.0.1:{{ dl_port.stdout }}"}
+            oracle_common_patch_ca_path: "{{ dl_tmp.path }}/tls/ca.crt"
+
+        - name: Read the file extracted from the https download
+          ansible.builtin.stat:
+            path: "{{ dl_tmp.path }}/staging_t4/37960098/README.html"
+          register: dl_https_staged
+
+        - name: Check the https download with the CA bundle worked (case 4)
+          ansible.builtin.assert:
+            that:
+              - dl_https_staged.stat.exists
+            fail_msg: the bundle was not downloaded and extracted from the https repository
+
+        - name: Download over https without the CA bundle
+          block:
+            - name: Run the https download without the CA bundle
+              # noqa reason - not variables of this role: shared oracle_common settings and the task file's include variables (test inputs).
+              ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+                name: oracle_database_patch_role
+                tasks_from: copy_files_to_server
+              vars:
+                temp_dir: "{{ dl_tmp.path }}/staging_t5"
+                artf_file_name: "{{ dl_bundle }}"
+                oracle_common_patch: {repo_dir_url: "https://127.0.0.1:{{ dl_port.stdout }}"}
+
+            - name: Note that the unverified certificate was accepted
+              ansible.builtin.set_fact:
+                dl_untrusted_accepted: true
+          rescue:
+            - name: Keep the failure message (case 4)
+              ansible.builtin.set_fact:
+                dl_untrusted_msg: "{{ ansible_failed_result.msg | default('') | string }}"
+
+        - name: Check the https download without the CA bundle was refused (case 4)
+          ansible.builtin.assert:
+            that:
+              - not (dl_untrusted_accepted | default(false))
+              - dl_untrusted_msg is search('(?i)certificate')
+            fail_msg: "message: {{ dl_untrusted_msg | default('none') }}"
+      always:
+        - name: Stop the https repository
+          ansible.builtin.command:
+            argv: [kill, "{{ dl_server.stdout | trim }}"]
+          when: dl_server.stdout | default('') | trim | length > 0
+          changed_when: true
+          failed_when: false
+
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ dl_tmp.path }}"
+            state: absent
+          when: dl_tmp.path is defined

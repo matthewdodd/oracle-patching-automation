@@ -1,0 +1,339 @@
+---
+# Regression test for the legacy input names and the defaults (rule: no regression). Runs on the controller only
+# and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/aliases.yml
+#
+# 1. With no input set, the oracle_common defaults reproduce the original values (working directories, env file,
+#    patch cycle and year, staging layout), except where U3 made them secure by default: the script mode (0777 is no
+#    longer allowed: 0750), the working directory base (a dedicated directory under the Oracle base instead of the
+#    world-writable /tmp; the original /tmp paths still work when given), and the download (TLS verified).
+# 2. Every original variable name still feeds the new one (script_permission, GROUP_NAME, artifactory_repo,
+#    remote_script_directory, remote_output_directory, is_grid_layout as boolean or legacy string,
+#    patch_folder_prefix, b_user, patch_folder_name, patch_file_name, timeToPause, remote_*_directory_base) and
+#    the short aliases (oracle_patch_cycle, oracle_patch_year, oracle_patch_file_name, oracle_patch_checksum,
+#    oracle_patch_db_version) work. Each check sets the alias as a task variable only, so checks are independent.
+# 3. Values given through an alias are validated like the new names (0777 through script_permission, a
+#    placeholder through GROUP_NAME, plain http through artifactory_repo, a non-boolean is_grid_layout).
+- name: Legacy input names and defaults regression test
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min]
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/group.yml
+    - ../roles/oracle_common/defaults/main/inputs.yml
+    - ../roles/oracle_common/defaults/main/modes.yml
+    - ../roles/oracle_common/defaults/main/oracle_versions.yml
+    - ../roles/oracle_common/defaults/main/patch.yml
+    - ../roles/oracle_common/defaults/main/platform.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/vars/main.yml
+    - ../roles/oracle_common/vars/Linux.yml
+    - ../roles/standalone_control_role/defaults/main.yml
+    - vars/valid_inputs.yml
+  vars:
+    # Job inputs only (from the fixture); every environment setting keeps its role default or comes from an alias.
+    target: "{{ validation_baseline.target }}"
+    DATABASE_NAME: "{{ validation_baseline.DATABASE_NAME }}"  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    TICKET_NUMBER: "{{ validation_baseline.TICKET_NUMBER }}"  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    sid_server_dict: "{{ validation_baseline.sid_server_dict }}"
+    # Through its short alias: play vars_files (the role defaults above) take precedence over play vars.
+    oracle_patch_checksum: "{{ validation_baseline.oracle_common_patch_checksum }}"
+    aliases_repo: https://repo.example.com/artifactory/release/oracledatabase/19.0.0
+  tasks:
+    - name: Check that the defaults reproduce the original values
+      ansible.builtin.assert:
+        that:
+          - oracle_common_staging_base == '/u01/oracle/ansible_patch_work'
+          - oracle_common_remote_script_directory == '/u01/oracle/ansible_patch_work/ora_ansible_scripts_ORCL01'
+          - oracle_common_remote_output_directory == '/u01/oracle/ansible_patch_work/ora_db_patch_ORCL01'
+          - oracle_common_env_file == '/local/ORCL01.env'
+          - oracle_common_patch_cycle == 'jan'
+          - oracle_common_patch_year == (ansible_facts['date_time']['year'] | string)[-2:]
+          - oracle_common_patch_file_name == ''
+          - oracle_common_patch_base_dir == '/u01/oracle'
+          - oracle_common_patch_owner == 'oracle'
+          - oracle_common_patch_staging_dir == ''
+          - oracle_common_artifact_platform == 'LINUX'
+          - oracle_common_script_permission == '0750'
+          - oracle_common_dir_mode == '0750'
+          - oracle_common_file_mode == '0640'
+          - oracle_common_work_group == ''
+          - oracle_common_patch_validate_certs | bool
+          - oracle_common_patch_ca_path == ''
+          - not (oracle_common_patch_use_proxy | bool)
+          - oracle_common_patch_proxy == ''
+          - oracle_common_patch_force_basic_auth | bool
+          - oracle_common_patch_repo_username == '' and oracle_common_patch_repo_password == ''
+          - oracle_common_group_membership_become_user == 'root'
+          - oracle_common_group_add_command == ['/bin/gpasswd', '--add']
+          - oracle_common_group_members_command == ['/usr/bin/getent', 'group']
+          - oracle_common_manage_group_membership | bool
+          - oracle_common_group_name == ''
+          - oracle_common_patch_repo_url == ''
+          - oracle_common_patch_repo_version_subdir | bool
+          - oracle_common_db_version == ''
+          - standalone_control_role_time_to_pause | int == 120
+          - standalone_control_role_remote_script_directory_base == '/tmp/ora_ansible_scripts_ORCL01'
+          - standalone_control_role_remote_output_directory_base == '~/ansiblescripts/startup/log'
+          - standalone_control_role_check_alert_log_script == 'check_alert_log.bash'
+          - standalone_control_role_start_pdb_listener_script == 'listener_ctl.bash'
+          - standalone_control_role_alert_log_check_log == 'log.check_alert_log.bash'
+          - not (standalone_control_role_fail_on_alert_log_errors | bool)
+          - not (standalone_control_role_fail_on_listener_log_errors | bool)
+          - not (standalone_control_role_fail_on_rename_logs_error | bool)
+        fail_msg: "a default changed: see the failed assertion above"
+        quiet: true
+
+    - name: Check script_permission
+      ansible.builtin.assert:
+        that: oracle_common_script_permission == '0700'
+        fail_msg: "script_permission does not feed oracle_common_script_permission (got {{ oracle_common_script_permission }})"
+        quiet: true
+      vars:
+        script_permission: "0700"
+
+    - name: Check that the original /tmp working directories are still available (oracle_common_staging_base)
+      ansible.builtin.assert:
+        that:
+          - oracle_common_remote_script_directory == '/tmp/ora_ansible_scripts_ORCL01'
+          - oracle_common_remote_output_directory == '/tmp/ora_db_patch_ORCL01'
+        fail_msg: "oracle_common_staging_base=/tmp does not reproduce the original paths"
+        quiet: true
+      vars:
+        oracle_common_staging_base: /tmp
+
+    - name: Check that the vault variables feed the repository credentials
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_repo_username == 'repo_reader'
+          - oracle_common_patch_repo_password == 'not-a-real-secret'
+        fail_msg: "vault_patch_repo_username / vault_patch_repo_password do not feed the repository credentials"
+        quiet: true
+      vars:
+        vault_patch_repo_username: repo_reader
+        vault_patch_repo_password: not-a-real-secret
+
+    - name: Check script_permission given as an integer
+      ansible.builtin.assert:
+        that: oracle_common_script_permission == 511
+        fail_msg: "script_permission 511 does not reach oracle_common_script_permission unchanged (got {{ oracle_common_script_permission }})"
+        quiet: true
+      vars:
+        script_permission: 511
+
+    - name: Check GROUP_NAME
+      ansible.builtin.assert:
+        that: oracle_common_group_name == 'dba_patch'
+        fail_msg: "GROUP_NAME does not feed oracle_common_group_name (got {{ oracle_common_group_name }})"
+        quiet: true
+      vars:
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+
+    - name: Check artifactory_repo
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_repo_url == aliases_repo
+          - not (oracle_common_patch_repo_version_subdir | bool)
+        fail_msg: >-
+          artifactory_repo does not feed oracle_common_patch_repo_url, or the release folder would be appended to it
+          (subdir {{ oracle_common_patch_repo_version_subdir }})
+        quiet: true
+      vars:
+        artifactory_repo: "{{ aliases_repo }}"
+
+    - name: Check remote_script_directory and remote_output_directory
+      ansible.builtin.assert:
+        that:
+          - oracle_common_remote_script_directory == '/var/tmp/scripts_ORCL01'
+          - oracle_common_remote_output_directory == '/var/tmp/output_ORCL01'
+        fail_msg: "remote_script_directory / remote_output_directory do not feed the oracle_common directories"
+        quiet: true
+      vars:
+        remote_script_directory: /var/tmp/scripts_ORCL01
+        remote_output_directory: /var/tmp/output_ORCL01
+
+    - name: Check is_grid_layout (Oracle layout)
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_base_dir == '/u01/oracle'
+          - oracle_common_patch_owner == 'oracle'
+        fail_msg: "is_grid_layout={{ is_grid_layout }} did not select the Oracle layout"
+        quiet: true
+      loop: ["false", false, "False", "no"]
+      vars:
+        is_grid_layout: "{{ item }}"
+
+    - name: Check is_grid_layout (Grid layout)
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_base_dir == '/u02/grid'
+          - oracle_common_patch_owner == 'grid'
+        fail_msg: "is_grid_layout={{ is_grid_layout }} did not select the Grid layout"
+        quiet: true
+      loop: ["true", true, "True", "yes"]
+      vars:
+        is_grid_layout: "{{ item }}"
+
+    - name: Check patch_folder_prefix, b_user and patch_folder_name
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_base_dir == '/opt/patches'
+          - oracle_common_patch_owner == 'patchowner'
+          - oracle_common_patch_staging_dir == '/opt/patches/stage'
+        fail_msg: "patch_folder_prefix / b_user / patch_folder_name do not feed the oracle_common values"
+        quiet: true
+      vars:
+        patch_folder_prefix: /opt/patches
+        b_user: patchowner
+        patch_folder_name: /opt/patches/stage
+
+    - name: Check patch_file_name
+      ansible.builtin.assert:
+        that: oracle_common_patch_file_name == 'LINUX_oct25.tar.gz'
+        fail_msg: "patch_file_name does not feed oracle_common_patch_file_name"
+        quiet: true
+      vars:
+        patch_file_name: LINUX_oct25.tar.gz
+
+    - name: Check the short aliases
+      ansible.builtin.assert:
+        that:
+          - oracle_common_patch_cycle == 'apr'
+          - oracle_common_patch_year == '25'
+          - oracle_common_patch_file_name == 'LINUX_apr25b.tar.gz'
+          - oracle_common_patch_checksum == 'md5:' ~ ('ab' * 16)
+          - oracle_common_db_version == '26ai'
+        fail_msg: "a short alias (oracle_patch_*) does not feed its oracle_common value"
+        quiet: true
+      vars:
+        oracle_patch_cycle: apr
+        oracle_patch_year: "25"
+        oracle_patch_file_name: LINUX_apr25b.tar.gz
+        patch_file_name: ignored_when_oracle_patch_file_name_is_set.tar.gz
+        oracle_patch_checksum: "md5:{{ 'ab' * 16 }}"
+        oracle_patch_db_version: 26ai
+
+    - name: Check timeToPause and the unused base directory names
+      ansible.builtin.assert:
+        that:
+          - standalone_control_role_time_to_pause | int == 30
+          - standalone_control_role_remote_script_directory_base == '/opt/s'
+          - standalone_control_role_remote_output_directory_base == '/opt/o'
+        fail_msg: "timeToPause / remote_*_directory_base do not feed the standalone_control_role values"
+        quiet: true
+      vars:
+        timeToPause: 30  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        remote_script_directory_base: /opt/s
+        remote_output_directory_base: /opt/o
+
+    - name: Check the original script name variables of standalone_control_role
+      ansible.builtin.assert:
+        that:
+          - standalone_control_role_check_mount_script == 'a1.bash'
+          - standalone_control_role_check_timestamp_script == 'a2.bash'
+          - standalone_control_role_check_alert_log_script == 'a3.bash'
+          - standalone_control_role_check_listener_logs_script == 'a4.bash'
+          - standalone_control_role_rename_logs_script == 'a5.bash'
+          - standalone_control_role_start_database_script == 'a6.bash'
+          - standalone_control_role_start_listener_script == 'a7.bash'
+          - standalone_control_role_start_pdb_script == 'a8.bash'
+          - standalone_control_role_start_pdb_listener_script == 'a9.bash'
+          - standalone_control_role_stop_pdb_script == 'b1.bash'
+          - standalone_control_role_stop_pdb_listener_script == 'b2.bash'
+          - standalone_control_role_stop_database_script == 'b3.bash'
+          - standalone_control_role_stop_listener_script == 'b4.bash'
+          - standalone_control_role_alert_log_check_log == 'log.a3.bash'
+        fail_msg: "an original script name variable does not feed its standalone_control_role value"
+        quiet: true
+      vars:
+        check_mount_script: a1.bash
+        check_timestamp_script: a2.bash
+        check_alertLog_script: a3.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        check_listenerLogs_script: a4.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        rename_logs_script: a5.bash
+        start_database_script: a6.bash
+        start_listener_script: a7.bash
+        start_pdb_script: a8.bash
+        start_pdbListener_script: a9.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        stop_pdb_script: b1.bash
+        stop_pdbListener_script: b2.bash  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        stop_database_script: b3.bash
+        stop_listener_script: b4.bash
+
+    - name: Accept valid inputs given through the original names
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: valid inputs through aliases
+        alias_case_rejected: false
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+        script_permission: "0750"
+        is_grid_layout: "true"
+
+    - name: Reject 0777 given through script_permission (integer 511)
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: script_permission 511
+        alias_case_rejected: true
+        alias_case_expected: ["alias script_permission", "got 0777"]
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+        script_permission: 511
+
+    - name: Reject 0777 given through script_permission (string)
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: script_permission "0777"
+        alias_case_rejected: true
+        alias_case_expected: ["got 0777"]
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+        script_permission: "0777"
+
+    - name: Reject a placeholder given through GROUP_NAME
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: GROUP_NAME placeholder
+        alias_case_rejected: true
+        alias_case_expected: ["oracle_common_group_name (alias GROUP_NAME)", "still the placeholder"]
+        GROUP_NAME: <CHANGE_ME>  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+
+    - name: Reject the missing group name (GROUP_NAME no longer has a site default)
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: no group name
+        alias_case_rejected: true
+        alias_case_expected: ["oracle_common_group_name (alias GROUP_NAME): required"]
+        artifactory_repo: "{{ aliases_repo }}"
+
+    - name: Reject plain http given through artifactory_repo
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: artifactory_repo http
+        alias_case_rejected: true
+        alias_case_expected: ["oracle_common_patch_repo_url (alias artifactory_repo)"]
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: http://repo.example.com/oracledatabase/19.0.0
+
+    - name: Reject a non-boolean is_grid_layout
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: is_grid_layout maybe
+        alias_case_rejected: true
+        alias_case_expected: ["oracle_common_is_grid_layout (alias is_grid_layout)"]
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+        is_grid_layout: maybe
+
+    - name: Reject a '..' path given through remote_script_directory
+      ansible.builtin.include_tasks: tasks/alias_validation_case.yml
+      vars:
+        alias_case_name: remote_script_directory with '..'
+        alias_case_rejected: true
+        alias_case_expected: ["alias remote_script_directory"]
+        GROUP_NAME: dba_patch  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        artifactory_repo: "{{ aliases_repo }}"
+        remote_script_directory: /tmp/../etc

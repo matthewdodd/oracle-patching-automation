@@ -1,0 +1,33 @@
+---
+# One invalid version definition: load the registry (roles/oracle_common tasks/oracle_version.yml) with the case's
+# overrides (or explicit version) and check that it is refused with the expected message.
+- name: Load the versions with an invalid definition ({{ definition_case.name }})
+  block:
+    - name: Reset the outcome of the previous case
+      ansible.builtin.set_fact:
+        definition_case_failed: false
+        definition_case_message: ""
+
+    - name: Load the supported Oracle versions
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: oracle_version
+        oracle_common_oracle_version_overrides: "{{ definition_case.overrides }}"
+        oracle_common_db_version: "{{ definition_case.db_version | default('') }}"
+  rescue:
+    - name: Note the refusal
+      ansible.builtin.set_fact:
+        definition_case_failed: true
+        # A looped assert reports "One or more items failed"; the item messages are in results.
+        definition_case_message: >-
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.results | default([]) | selectattr('failed', 'defined') | selectattr('failed')
+             | map(attribute='msg') | join(' ') }}
+
+- name: Check the outcome ({{ definition_case.name }})
+  ansible.builtin.assert:
+    that:
+      - definition_case_failed
+      - definition_case.message in definition_case_message
+    fail_msg: "case '{{ definition_case.name }}': failed {{ definition_case_failed }}; message \"{{ definition_case_message }}\""
+    quiet: true

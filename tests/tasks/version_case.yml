@@ -1,0 +1,49 @@
+---
+# One version case: select the version entry for the case's detected version (roles/oracle_common
+# tasks/oracle_version_select.yml), resolve the patch bundle (tasks/patch_artifact.yml), then compare the selected
+# entry and every resolved value (or the failure message) with the expectation. The case's inputs are include
+# vars (scoped to this include); the outputs are reset to sentinels first.
+- name: Reset the outputs of the previous case ({{ version_case.name }})
+  ansible.builtin.set_fact:
+    oracle_common_oracle_version: {id: __version_case_not_run__}
+    oracle_common_detected_release: __version_case_not_run__
+    oracle_common_patch: {file_name: __version_case_not_run__}
+    version_case_failed: false
+    version_case_message: ""
+
+- name: Run the version selection and patch resolution ({{ version_case.name }})
+  block:
+    - name: Select the Oracle version
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: oracle_version_select
+
+    - name: Resolve the patch bundle
+      ansible.builtin.include_tasks: oracle_common.yml
+      vars:
+        test_tasks_from: patch_artifact
+  rescue:
+    - name: Note the failure
+      ansible.builtin.set_fact:
+        version_case_failed: true
+        version_case_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Check the outcome ({{ version_case.name }})
+  ansible.builtin.assert:
+    that:
+      - version_case_failed == (version_case.message is defined)
+      - version_case.message | default('') in version_case_message
+      - version_case.message is defined or oracle_common_oracle_version.id == version_case.id
+      - version_case.message is defined or version_case.release is not defined or oracle_common_detected_release == version_case.release
+      - version_case.message is defined or __version_case_resolved == version_case.patch | default({})
+    fail_msg: >-
+      case '{{ version_case.name }}': failed {{ version_case_failed }} "{{ version_case_message }}"; selected
+      {{ oracle_common_oracle_version.id }} (expected {{ version_case.id | default('a failure') }}), db_ver
+      {{ oracle_common_detected_release }} (expected {{ version_case.release | default('any') }}); resolved
+      {{ __version_case_resolved }} (expected {{ version_case.patch | default({}) }})
+    quiet: true
+  vars:
+    # The resolved values of the keys the case states (an exact comparison of those keys).
+    __version_case_resolved: >-
+      {{ oracle_common_patch | dict2items | selectattr('key', 'in', (version_case.patch | default({})).keys() | list)
+         | items2dict }}

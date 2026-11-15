@@ -1,0 +1,34 @@
+---
+# EXAMPLE ONLY for the dev environment - not encrypted and not loaded by Ansible (the .example extension is ignored).
+# Every value is the "<CHANGE_ME>" placeholder, which the playbooks reject, so a copy that is not filled in cannot run.
+# The vault_* names are already mapped in oracle_common.yml (next to this file). To use it:
+#
+#   cp inventory/dev/group_vars/all/vault.yml.example inventory/dev/group_vars/all/vault.yml
+#   $EDITOR inventory/dev/group_vars/all/vault.yml        # real values; delete the entries you do not use
+#   ansible-vault encrypt --vault-id dev@prompt inventory/dev/group_vars/all/vault.yml
+#   head -n 1 inventory/dev/group_vars/all/vault.yml      # must start with $ANSIBLE_VAULT;1.2;AES256;dev
+#   ansible-vault edit --vault-id dev@prompt inventory/dev/group_vars/all/vault.yml     # later changes
+#   ansible-playbook -i inventory/dev/hosts.yml --vault-id dev@prompt oracle_database_patch.yml -e target=...
+#
+# Never commit an unencrypted vault.yml or a vault password file (.gitignore excludes .vault_pass* and vault_pass*),
+# and never paste a secret into a chat, a ticket or a job's extra vars. Use a dev-only vault password, different from
+# every other environment. Rotate it with
+#   ansible-vault rekey --vault-id dev@prompt --new-vault-id dev@prompt inventory/dev/group_vars/all/vault.yml
+# AAP: create a Vault credential with Vault Identifier "dev" and the dev vault password, and attach it to the dev job
+# templates (no --vault-id option is needed there).
+
+# Teams Workflows webhook URL (https; the URL is a bearer secret) -> oracle_common_notify_webhook_url.
+# Delete the entry to run without notifications (they are then skipped with a message).
+# Left as "<CHANGE_ME>", the whole run is refused by input validation (it is not just skipped).
+vault_teams_webhook_url: "<CHANGE_ME>"
+
+# ServiceNow change check -> oracle_common_snow_instance / _username / _password. Instance: an https URL or the bare
+# instance name (<name>.service-now.com). Needed unless every job of this environment sets override_chg.
+vault_snow_instance: "<CHANGE_ME>"
+vault_snow_user: "<CHANGE_ME>"
+vault_snow_password: "<CHANGE_ME>"
+
+# Patch repository credentials (HTTP basic authentication) -> oracle_common_patch_repo_username / _password.
+# Set both or delete both (no credentials are sent then).
+vault_patch_repo_username: "<CHANGE_ME>"
+vault_patch_repo_password: "<CHANGE_ME>"

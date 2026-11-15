@@ -1,0 +1,260 @@
+---
+# Regression test for the supported Oracle versions (roles/oracle_common tasks/oracle_version.yml,
+# tasks/oracle_version_select.yml) and the patch bundle resolution (tasks/patch_artifact.yml). Runs on the
+# controller only and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/oracle_versions.yml
+#
+# 1. The registry holds exactly the five version files (12.1, 12.2, 19, 23ai, 26ai), each loaded unchanged;
+#    overrides merge over a file, and invalid definitions are refused.
+# 2. Detected versions select the right entry (version and version_full forms; 23ai vs 26ai by release update,
+#    with version_full preferred over version for the selection while db_ver stays the first four characters of
+#    version; explicit selection with oracle_common_db_version wins); unknown or unreadable versions stop with a
+#    clear message.
+# 3. The patch file name (original default <AIX|LINUX>_jan<YY>.tar.gz; configurable cycle, year and name),
+#    repository folder, staging directory and owner are resolved per version and layout, and the explicit
+#    repository/release comparison that replaced the fixed-offset sanity check refuses a mismatched folder.
+- name: Oracle versions and patch bundle regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/group.yml
+    - ../roles/oracle_common/defaults/main/inputs.yml
+    - ../roles/oracle_common/defaults/main/modes.yml
+    - ../roles/oracle_common/defaults/main/oracle_versions.yml
+    - ../roles/oracle_common/defaults/main/patch.yml
+    - ../roles/oracle_common/defaults/main/platform.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/vars/main.yml
+    - ../roles/oracle_common/vars/Linux.yml
+  vars:
+    DATABASE_NAME: ORCL01  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    versions_expected_ids: ["12.1", "12.2", "19", "23ai", "26ai"]
+    versions_expected_artifact_dirs: {"12.1": "12.1.0.2", "12.2": "12.2.0.1", "19": "19.0.0", "23ai": "23.0.0", "26ai": "26.0.0"}
+    versions_base: https://repo.example.com/oracledatabase
+    version_cases:
+      # --- detection ---------------------------------------------------------------------------------
+      - {name: 12.1.0.2.0, detected: 12.1.0.2.0, id: "12.1",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/12.1.0.2", staging_dir: /u01/oracle/software_dir/12.1/jan26_ORCL01}}
+      - {name: 12.2.0.1.0, detected: 12.2.0.1.0, id: "12.2",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/12.2.0.1", staging_dir: /u01/oracle/software_dir/12.2/jan26_ORCL01}}
+      - name: 19.0.0.0.0 (original defaults)
+        detected: 19.0.0.0.0
+        id: "19"
+        patch:
+          file_name: LINUX_jan26.tar.gz
+          tag: jan26
+          repo_dir_url: https://repo.example.com/oracledatabase/19.0.0
+          url: https://repo.example.com/oracledatabase/19.0.0/LINUX_jan26.tar.gz
+          base_dir: /u01/oracle
+          owner: oracle
+          staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01
+      - {name: 19c version_full, detected: 19.24.0.0.0, id: "19"}
+      - {name: 23.0.0.0.0, detected: 23.0.0.0.0, id: 23ai,
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/23.0.0", staging_dir: /u01/oracle/software_dir/23ai/jan26_ORCL01}}
+      - {name: 23ai version_full, detected: 23.5.0.24.07, id: 23ai}
+      - {name: 23ai release update 23.25, detected: 23.25.0.0.0, id: 23ai}
+      - {name: 26ai as release update 23.26, detected: 23.26.0.0.0, id: 26ai,
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/26.0.0", staging_dir: /u01/oracle/software_dir/26ai/jan26_ORCL01}}
+      - {name: 26ai as release update 23.31, detected: 23.31.1.0.0, id: 26ai}
+      - {name: 26ai reported as 26.x, detected: 26.1.0.0.0, id: 26ai}
+      - {name: 26ai selected explicitly on 23.0.0.0.0, detected: 23.0.0.0.0, db_version: 26ai, id: 26ai}
+      # --- version (v$instance.version) plus version_full (v$instance.version_full) --------------------
+      - {name: 23.0.0.0.0 with version_full 23.26.0.0.0 selects 26ai, detected: 23.0.0.0.0, full: 23.26.0.0.0, id: 26ai, release: "23.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/26.0.0", staging_dir: /u01/oracle/software_dir/26ai/jan26_ORCL01}}
+      - {name: 23.0.0.0.0 with version_full 23.7.0.0.0 selects 23ai, detected: 23.0.0.0.0, full: 23.7.0.0.0, id: 23ai, release: "23.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/23.0.0", staging_dir: /u01/oracle/software_dir/23ai/jan26_ORCL01}}
+      - {name: 23.0.0.0.0 without version_full falls back to 23ai, detected: 23.0.0.0.0, full: "", id: 23ai, release: "23.0"}
+      - {name: 19.0.0.0.0 with version_full 19.21.0.0.0 keeps db_ver 19.0, detected: 19.0.0.0.0, full: 19.21.0.0.0, id: "19", release: "19.0",
+         patch: {repo_dir_url: "https://repo.example.com/oracledatabase/19.0.0", staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01}}
+      - {name: 12.2.0.1.0 with an empty version_full selects 12.2, detected: 12.2.0.1.0, full: "", id: "12.2", release: "12.2",
+         patch: {staging_dir: /u01/oracle/software_dir/12.2/jan26_ORCL01}}
+      - {name: 12.1.0.2.0 with an empty version_full keeps db_ver 12.1, detected: 12.1.0.2.0, full: "", id: "12.1", release: "12.1"}
+      - {name: explicit 23ai beats version_full 23.26.0.0.0, detected: 23.0.0.0.0, full: 23.26.0.0.0, db_version: 23ai, id: 23ai, release: "23.0"}
+      - {name: explicit 26ai beats version_full 23.7.0.0.0, detected: 23.0.0.0.0, full: 23.7.0.0.0, db_version: 26ai, id: 26ai}
+      - {name: explicit 26ai refused when version_full is 19c, detected: 23.0.0.0.0, full: 19.21.0.0.0, db_version: 26ai,
+         message: "reports version 19.21.0.0.0, which that entry does not accept"}
+      - {name: version_full of another release than version decides, detected: 23.0.0.0.0, full: 21.3.0.0.0,
+         message: "Database version 21.3.0.0.0 is not supported"}
+      - {name: version_full with a trailing newline, detected: 23.0.0.0.0, full: "23.26.0.0.0\n", message: "Could not read the database version_full"}
+      - {name: unreadable version_full, detected: 19.0.0.0.0, full: "ORA-00904", message: "Could not read the database version_full"}
+      - {name: 19 selected explicitly on 19.0.0.0.0, detected: 19.0.0.0.0, db_version: "19", id: "19"}
+      - {name: explicit 26ai refused on a 19c database, detected: 19.0.0.0.0, db_version: 26ai, message: "which that entry does not accept"}
+      - {name: 11.2 not supported, detected: 11.2.0.4.0, message: "Database version 11.2.0.4.0 is not supported"}
+      - {name: 21c not supported, detected: 21.0.0.0.0, message: "is not supported"}
+      - {name: unreadable version, detected: "ORA-01034: ORACLE not available", message: "Could not read the database version"}
+      - {name: version with a trailing newline, detected: "19.0.0.0.0\n", message: "Could not read the database version"}
+      - {name: empty version, detected: "", message: "Could not read the database version"}
+      # --- patch naming, layout and repository -------------------------------------------------------
+      - name: base URL with a trailing slash
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/
+        id: "19"
+        patch: {repo_dir_url: "https://repo.example.com/oracledatabase/19.0.0"}
+      - name: legacy release-folder URL (artifactory_repo style)
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/19.0.0
+        subdir: false
+        id: "19"
+        patch: {repo_dir_url: "https://repo.example.com/oracledatabase/19.0.0", url: "https://repo.example.com/oracledatabase/19.0.0/LINUX_jan26.tar.gz"}
+      - name: legacy URL of another release refused
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/12.2.0.1
+        subdir: false
+        message: "Repository folder '12.2.0.1' does not match the database release"
+      - name: base URL already naming another release refused
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/12.2.0.1
+        message: "does not match the database release"
+      - name: base URL already naming this release is not doubled
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/19.0.0
+        id: "19"
+        patch: {repo_dir_url: "https://repo.example.com/oracledatabase/19.0.0"}
+      - name: release check disabled
+        detected: 19.0.0.0.0
+        repo_url: https://repo.example.com/oracledatabase/12.2.0.1
+        subdir: false
+        version_check: false
+        id: "19"
+        patch: {repo_dir_url: "https://repo.example.com/oracledatabase/12.2.0.1"}
+      - name: grid layout
+        detected: 19.0.0.0.0
+        grid: "true"
+        id: "19"
+        patch: {base_dir: /u02/grid, owner: grid, staging_dir: /u02/grid/software_dir/19.0/jan26_ORCL01}
+      - name: AIX file name prefix
+        detected: 12.1.0.2.0
+        platform: AIX
+        id: "12.1"
+        patch: {file_name: AIX_jan26.tar.gz}
+      - name: configurable patch cycle and year
+        detected: 19.0.0.0.0
+        cycle: apr
+        year: "25"
+        id: "19"
+        patch: {file_name: LINUX_apr25.tar.gz, tag: apr25, staging_dir: /u01/oracle/software_dir/19.0/apr25_ORCL01}
+      - name: explicit patch file name
+        detected: 19.0.0.0.0
+        file_name: LINUX_19.25_combo.tar.gz
+        id: "19"
+        patch: {file_name: LINUX_19.25_combo.tar.gz, url: "https://repo.example.com/oracledatabase/19.0.0/LINUX_19.25_combo.tar.gz"}
+      - name: explicit staging directory
+        detected: 19.0.0.0.0
+        staging_dir: /u01/oracle/stage/ORCL01
+        id: "19"
+        patch: {staging_dir: /u01/oracle/stage/ORCL01}
+      - {name: patch file name with a directory refused, detected: 19.0.0.0.0, file_name: ../evil.tar.gz, message: "must be a plain file"}
+      - {name: staging directory with '..' refused, detected: 19.0.0.0.0, staging_dir: /u01/oracle/../etc, message: "oracle_common_patch_staging_dir"}
+      - {name: http repository refused, detected: 19.0.0.0.0, repo_url: "http://repo.example.com/oracledatabase", message: "must be an https URL"}
+      - name: http repository with the opt-in toggle
+        detected: 19.0.0.0.0
+        repo_url: http://repo.example.com/oracledatabase
+        allow_http: true
+        id: "19"
+        patch: {repo_dir_url: "http://repo.example.com/oracledatabase/19.0.0"}
+  tasks:
+    - name: Load the supported Oracle versions
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: oracle_version
+
+    - name: Check the five version files are loaded unchanged
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_oracle_versions.keys() | list | sort == versions_expected_ids
+          - __versions_from_files == __oracle_common_oracle_versions
+          - __oracle_common_oracle_versions | dict2items | map(attribute='key')
+              | map('extract', versions_expected_artifact_dirs) | list
+            == __oracle_common_oracle_versions | dict2items | map(attribute='value.artifact_dir') | list
+          - __oracle_common_oracle_versions | dict2items | selectattr('value.qopiprep_fix') | map(attribute='key') | list == ['12.1']
+          - __oracle_common_oracle_versions | dict2items | selectattr('value.desupported') | map(attribute='key') | sort == ['12.1', '12.2']
+          - __oracle_common_oracle_versions | dict2items | map(attribute='value.datapatch_startup_mode') | unique | list == ['upgrade']
+        fail_msg: "version registry: {{ __oracle_common_oracle_versions }}"
+        quiet: true
+      vars:
+        __versions_from_files: >-
+          {{ dict(versions_expected_ids | zip(query('ansible.builtin.file',
+                  *(versions_expected_ids | map('regex_replace', '\A(.*)\Z', playbook_dir ~ '/../roles/oracle_common/vars/oracle_versions/\1.yml')
+                    | list)) | map('from_yaml') | map(attribute='__oracle_common_version_definition'))) }}
+
+    - name: Merge an override over a version file
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: oracle_version
+        oracle_common_oracle_version_overrides: {"26ai": {artifact_dir: "23.26.0", datapatch_startup_mode: normal}}
+
+    - name: Check the override
+      ansible.builtin.assert:
+        that:
+          - __oracle_common_oracle_versions['26ai'].artifact_dir == '23.26.0'
+          - __oracle_common_oracle_versions['26ai'].datapatch_startup_mode == 'normal'
+          - __oracle_common_oracle_versions['26ai'].label == 'Oracle AI Database 26ai'
+          - __oracle_common_oracle_versions['19'].artifact_dir == '19.0.0'
+        fail_msg: "override not merged: {{ __oracle_common_oracle_versions['26ai'] }}"
+        quiet: true
+
+    - name: Refuse invalid version definitions
+      ansible.builtin.include_tasks: tasks/version_definition_case.yml
+      loop:
+        - {name: artifact_dir with '..', overrides: {"19": {artifact_dir: "../x"}}, message: "Oracle version 19 "}
+        - {name: unanchored match_regex, overrides: {"23ai": {match_regex: "^23"}}, message: "Oracle version 23ai "}
+        - {name: unknown datapatch mode, overrides: {"12.2": {datapatch_startup_mode: fast}}, message: "Oracle version 12.2 "}
+        - {name: incomplete new version, overrides: {"21": {label: Oracle Database 21c}}, message: "Oracle version 21 "}
+        - {name: unknown explicit version, overrides: {}, db_version: 27ai, message: "must be empty (detect the version) or one of"}
+      loop_control:
+        loop_var: definition_case
+        label: "{{ definition_case.name }}"
+
+    - name: Reload the supported Oracle versions without overrides
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: oracle_version
+
+    - name: Run the version cases
+      ansible.builtin.include_tasks: tasks/version_case.yml
+      loop: "{{ version_cases }}"
+      loop_control:
+        loop_var: version_case
+        label: "{{ version_case.name }}"
+      vars:
+        oracle_common_detected_version: "{{ version_case.detected }}"
+        oracle_common_detected_version_full: "{{ version_case.full | default('') }}"
+        oracle_common_db_version: "{{ version_case.db_version | default('') }}"
+        oracle_common_patch_repo_url: "{{ version_case.repo_url | default(versions_base) }}"
+        oracle_common_patch_repo_version_subdir: "{{ version_case.subdir | default(true) }}"
+        oracle_common_patch_repo_version_check: "{{ version_case.version_check | default(true) }}"
+        oracle_common_patch_repo_allow_http: "{{ version_case.allow_http | default(false) }}"
+        oracle_common_patch_cycle: "{{ version_case.cycle | default('jan') }}"
+        oracle_common_patch_year: "{{ version_case.year | default('26') }}"
+        oracle_common_patch_file_name: "{{ version_case.file_name | default('') }}"
+        oracle_common_patch_staging_dir: "{{ version_case.staging_dir | default('') }}"
+        oracle_common_is_grid_layout: "{{ version_case.grid | default('false') }}"
+        oracle_common_artifact_platform: "{{ version_case.platform | default('LINUX') }}"
+
+    # initialization_role passes v$instance.version_full (db_version_full.txt, missing or empty tolerated) to the
+    # selection and keeps db_ver from v$instance.version (read as data: the role needs a database host).
+    - name: Check initialization_role passes version_full to the selection and keeps db_ver from version
+      ansible.builtin.assert:
+        that:
+          - __init_select | length == 1
+          - __init_select[0].vars.oracle_common_detected_version is match('\\A\\{\\{ *db_ver_long *\\}\\}\\Z')
+          - "'__initialization_role_db_version_full_file.content' in __init_select[0].vars.oracle_common_detected_version_full"
+          - "'else' in __init_select[0].vars.oracle_common_detected_version_full"
+          - __init_slurp | length == 1
+          - __init_slurp[0]['ansible.builtin.slurp'].src is search('/db_version_full\\.txt\\Z')
+          - __init_slurp[0].when | length > 0
+          - __init_dbver | length == 1
+          - __init_dbver[0]['ansible.builtin.set_fact'].db_ver is match('\\A\\{\\{ *oracle_common_detected_release *\\}\\}\\Z')
+        fail_msg: >-
+          initialization_role wiring of the version selection changed: select {{ __init_select }}, version_full read
+          {{ __init_slurp }}, db_ver {{ __init_dbver }}
+        quiet: true
+      vars:
+        __init_tasks: >-
+          {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/main.yml') | from_yaml)
+             | selectattr('block', 'defined') | map(attribute='block') | flatten }}
+        __init_select: "{{ __init_tasks | selectattr('name', 'equalto', 'Select the Oracle version') | list }}"
+        __init_slurp: "{{ __init_tasks | selectattr('name', 'equalto', 'Ingest database version_full information') | list }}"
+        __init_dbver: "{{ __init_tasks | selectattr('name', 'equalto', 'Set the database version facts') | list }}"

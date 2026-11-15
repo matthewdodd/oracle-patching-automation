@@ -1,0 +1,30 @@
+---
+# ServiceNow change check. Entry point used by oracle_chg_ticket.yml (playbook directory):
+#   - ansible.builtin.include_role: {name: oracle_common, tasks_from: change_ticket}
+# Skipped when override_chg is true (boolean, or the legacy strings "true" / "false"); otherwise the change record
+# TICKET_NUMBER must exist in ServiceNow and be in an allowed state (default Scheduled or Implement).
+- name: Read override_chg
+  ansible.builtin.set_fact:
+    __oracle_common_chg_override_valid: "{{ __oracle_common_chg_override_ok }}"
+    __oracle_common_chg_skip: "{{ __oracle_common_chg_override_ok and (oracle_common_override_chg | bool) }}"
+  vars:
+    __oracle_common_chg_override_ok: >-
+      {{ oracle_common_override_chg is boolean
+         or (oracle_common_override_chg | string | lower) in __oracle_common_bool_strings }}
+
+- name: Check override_chg
+  ansible.builtin.assert:
+    that: __oracle_common_chg_override_valid | bool
+    fail_msg: >-
+      override_chg: must be true or false (the strings "true" / "false" are accepted); got
+      '{{ oracle_common_override_chg }}'
+    quiet: true
+
+- name: Report the skipped change check
+  ansible.builtin.debug:
+    msg: "ServiceNow change check skipped: override_chg is true (change ticket '{{ TICKET_NUMBER | default('') }}' not checked)"
+  when: __oracle_common_chg_skip | bool
+
+- name: Check the change record in ServiceNow
+  ansible.builtin.include_tasks: change_ticket_check.yml
+  when: not (__oracle_common_chg_skip | bool)

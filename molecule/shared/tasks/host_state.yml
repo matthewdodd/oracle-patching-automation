@@ -1,0 +1,54 @@
+---
+# Records what a run must leave alone on a host into molecule_states[<molecule_state_name>]:
+#   processes  the instance and listener processes (pid and command line): a database or listener that was stopped or
+#              restarted gets a new pid
+#   patches    opatch lspatches of every Oracle home (molecule_homes)
+#   opatch     the OPatch directories of every home (OPatch, OPatch.bak.<timestamp> left by an OPatch upgrade)
+#   databases  the SQL patch registry and the startup/shutdown history of every database (stub state)
+- name: List the instance and listener processes - {{ molecule_state_name }}
+  ansible.builtin.command:
+    argv: [ps, -e, -o, pid=, -o, args=]
+  register: __molecule_state_ps
+  changed_when: false
+
+- name: List the patches of every Oracle home - {{ molecule_state_name }}
+  ansible.builtin.command:
+    argv: ["{{ item }}/OPatch/opatch", lspatches]
+  become: true
+  become_user: oracle
+  loop: "{{ molecule_homes }}"
+  register: __molecule_state_lspatches
+  changed_when: false
+
+- name: List the OPatch directories of every Oracle home - {{ molecule_state_name }}
+  ansible.builtin.find:
+    paths: "{{ molecule_homes }}"
+    patterns: "OPatch*"
+    file_type: directory
+  register: __molecule_state_opatch
+
+- name: Read the stub state of every database - {{ molecule_state_name }}
+  ansible.builtin.slurp:
+    src: "{{ molecule_oracle_base }}/molecule_state/{{ item.0.sid }}/{{ item.1 }}"
+  loop: "{{ molecule_databases | product(['sqlpatch', 'history']) | list }}"
+  loop_control:
+    label: "{{ item.0.sid }}/{{ item.1 }}"
+  register: __molecule_state_db
+
+- name: Keep the host state - {{ molecule_state_name }}
+  ansible.builtin.set_fact:
+    molecule_states: >-
+      {{ molecule_states | default({}) | combine({molecule_state_name: {
+           'processes': __molecule_state_ps.stdout_lines | map('trim')
+                        | select('search', '\A[0-9]+ (ora_(pmon|smon)_\S+|\S+/bin/tnslsnr .*)\Z') | sort,
+           'patches': dict(molecule_homes | zip(__molecule_state_lspatches.results | map(attribute='stdout'))),
+           'opatch': __molecule_state_opatch.files | map(attribute='path') | sort,
+           'databases': __molecule_state_databases}}) }}
+  vars:
+    # {"<SID>/sqlpatch": "<content>", "<SID>/history": "<content>", ...}
+    __molecule_state_databases: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for r in __molecule_state_db.results -%}
+      {%-   set ns.out = ns.out | combine({r.item.0.sid ~ '/' ~ r.item.1: r.content | b64decode}) -%}
+      {%- endfor -%}
+      {{ ns.out }}

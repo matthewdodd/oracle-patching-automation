@@ -1,30 +1,53 @@
 ---
-##This script copies the check_alert_log.bash script to server and checks the alert log for errors and warnings.
-##
-
-- name: copy check_alert_log script to {{ server_name }}
-  copy:
-    src: "{{ check_alertLog_script }}"
-    dest: "{{ remote_script_directory }}/{{ check_alertLog_script }}"
-    mode: "{{script_permission}}"
-    force: yes
-  delegate_to: "{{ server_name }}"
-
+## Checks the alert log for errors and warnings with check_alert_log.bash (copied by copy_scripts.yml). Logged to
+## <remote_output_directory>/<standalone_control_role_alert_log_check_log>.<YYYY.MM.DD>; no shell interpolation.
+## ORA- errors, and a check that could not run (exit code other than 0, e.g. $ORACLE_BASE missing), are a WARNING by
+## default, as before (the original printed ORA- errors as an ignored failure and its pipe into tee hid the exit code);
+## standalone_control_role_fail_on_alert_log_errors: true makes them fail the startup (the database is already started).
 
 - name: Checking alert log for errors for {{ ORACLE_SID }}
-  shell: >
-    {{ remote_script_directory }}/{{ check_alertLog_script }} {{ ORACLE_SID }}
-    &> >(tee {{ remote_output_directory }}/log.{{ check_mount_script }}.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
+  ansible.builtin.command:
+    argv:
+      - "{{ oracle_common_bash_path | default('/usr/bin/bash') }}"
+      - -c
+      - "{{ __standalone_control_role_logged_run }}"
+      - check_alert_log
+      - "{{ remote_output_directory }}/{{ standalone_control_role_alert_log_check_log }}"
+      - "{{ remote_script_directory }}/{{ standalone_control_role_check_alert_log_script }}"
+      - "{{ ORACLE_SID }}"
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
-  register: check_alertLog_status
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_alert_log_status
+  changed_when: false
+  failed_when:
+    - standalone_control_role_alert_log_status.rc | default(1) != 0
+    - standalone_control_role_fail_on_alert_log_errors | bool
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
 
-- name: print check_alertLog_status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ check_alertLog_status.stdout_lines }}"
-  failed_when: "'ORA-' in check_alertLog_status.stdout"
-  ignore_errors: yes
+- name: Print check_alertLog_status for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_alert_log_status.stdout_lines | default([]) + standalone_control_role_alert_log_status.stderr_lines | default([]) }}"
+
+- name: Report alert log errors for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ ('the alert log check of ' ~ ORACLE_SID ~ ' exited with ' ~ standalone_control_role_alert_log_status.rc)
+                  if (standalone_control_role_alert_log_status.rc | default(1) != 0)
+                  else ('the alert log of ' ~ ORACLE_SID ~ ' has ORA- errors') }}
+      (see the output above and {{ remote_output_directory }}/{{ standalone_control_role_alert_log_check_log }}.<date>);
+      the run goes on (standalone_control_role_fail_on_alert_log_errors is false).
+  when:
+    - ('ORA-' in standalone_control_role_alert_log_status.stdout | default('')) or (standalone_control_role_alert_log_status.rc | default(1) != 0)
+    - not (standalone_control_role_fail_on_alert_log_errors | bool)
+
+- name: Fail on alert log errors for {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that: "'ORA-' not in standalone_control_role_alert_log_status.stdout | default('')"
+    fail_msg: >-
+      The alert log of {{ ORACLE_SID }} has ORA- errors (see the output above) and
+      standalone_control_role_fail_on_alert_log_errors is true. The database is started.
+    quiet: true
+  when: standalone_control_role_fail_on_alert_log_errors | bool

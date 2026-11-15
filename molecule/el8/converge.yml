@@ -1,0 +1,8 @@
+---
+# Runs the unmodified playbook against every test host, as an AAP job template would: target is the comma-separated
+# host list (here all hosts of molecule_oracle) and every other input comes from the inventory (molecule.yml).
+# verify.yml runs the playbook again (already applied, then with a wrong checksum).
+- name: Patch the Oracle database (stub Oracle software)
+  ansible.builtin.import_playbook: ../../oracle_database_patch.yml
+  vars:
+    target: "{{ groups['molecule_oracle'] | join(',') }}"

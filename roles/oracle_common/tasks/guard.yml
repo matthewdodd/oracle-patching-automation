@@ -1,0 +1,54 @@
+---
+# Refuses platforms the automation cannot run on, before any OS file is loaded or the host is changed.
+# The messages name the actual distribution and version.
+#
+# The target plays do not gather facts up front (gather_facts: false): ansible-core 2.22 modules, fact gathering
+# included, need Python 3.9 or later on the target, so on EL7 or Amazon Linux 2 the run would stop with an
+# interpreter error before any guard ran. When no facts have been gathered yet, the OS release is first read
+# without Python (a static raw command, no variables) and checked, then the facts are gathered.
+- name: Read the OS release without Python
+  ansible.builtin.raw: uname -s; cat /etc/os-release 2>/dev/null; cat /etc/redhat-release 2>/dev/null; true
+  register: __oracle_common_raw_os
+  changed_when: false
+  check_mode: false
+  when: ansible_facts['distribution'] is not defined
+
+- name: Refuse EL7 and Amazon Linux 2 before gathering facts
+  ansible.builtin.include_tasks: guard_os_release.yml
+  vars:
+    oracle_common_os_release_text: "{{ __oracle_common_raw_os.stdout | default('') }}"
+  when: ansible_facts['distribution'] is not defined
+
+- name: Gather facts
+  ansible.builtin.setup:
+  when: ansible_facts['distribution'] is not defined
+
+- name: Check the target OS is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] is defined
+      - ansible_facts['system'] in oracle_common_supported_systems
+      - (role_path ~ '/vars/' ~ ansible_facts['system'] ~ '.yml') is file
+    fail_msg: >-
+      Failed: OS not supported ({{ ansible_facts['system'] | default('unknown: facts were not gathered') }}
+      {{ ansible_facts['distribution'] | default('') }} {{ ansible_facts['distribution_version'] | default('') }}).
+      Supported: {{ oracle_common_supported_systems | join(', ') }}, each with a vars/<system>.yml file in the
+      oracle_common role.
+    quiet: true
+
+# EL7 (and older), and Amazon Linux 2 (os_family RedHat, major release 2), are refused: ansible-core 2.22 needs
+# Python 3.9 or later on the target. Amazon Linux 2023 (major release 2023) and RHEL 8 / 9 / 10 and their
+# rebuilds pass. The release must be a whole number at least __oracle_common_redhat_min_major_version.
+- name: Check the Red Hat family release is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution_major_version'] | default('') | string is match('\A[0-9]+\Z')
+      - ansible_facts['distribution_major_version'] | int >= __oracle_common_redhat_min_major_version | int
+    fail_msg: >-
+      Failed: {{ ansible_facts['distribution'] | default('Red Hat family') }}
+      {{ ansible_facts['distribution_version'] | default(ansible_facts['distribution_major_version'] | default('(unknown release)')) }}
+      is not supported. Red Hat family releases before {{ __oracle_common_redhat_min_major_version }} (such as EL7)
+      and Amazon Linux 2 are refused: ansible-core 2.22 needs Python 3.9 or later on the target. Supported Red Hat
+      family releases: {{ __oracle_common_redhat_min_major_version }} and later.
+    quiet: true
+  when: ansible_facts['os_family'] | default('') == 'RedHat'

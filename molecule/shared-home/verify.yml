@@ -1,0 +1,19 @@
+---
+# Checks what converge.yml did (the home patched once with the Release Update and the OJVM patch, datapatch in both
+# databases, both restarted with their listeners, the runs' files removed, the download over https with its checksum),
+# then runs the playbook twice more: unchanged with both databases in scope (already applied: "unneeded", nothing
+# stopped or changed), and with molb alone (still refused by the shared home check). Read-only on the host apart from
+# those runs.
+- name: Verify the patch run
+  hosts: molecule_oracle
+  tasks:
+    - name: Check the result of converge
+      ansible.builtin.include_tasks: ../shared/tasks/check_converge.yml
+
+    - name: Re-run the playbook (already applied) and check it stopped and changed nothing
+      ansible.builtin.include_tasks: ../shared/tasks/rerun_applied.yml
+
+    - name: Run the playbook with only DATABASE_NAME in scope again and check it is still refused
+      ansible.builtin.include_tasks: tasks/refused_partial_scope.yml
+      vars:
+        molecule_refusal_name: after the patch

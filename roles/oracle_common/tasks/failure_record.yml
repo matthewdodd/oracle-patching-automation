@@ -1,0 +1,20 @@
+---
+# Records why a stage of the playbook failed, for the failure report (tasks/failure_report.yml). Call it first in a
+# rescue section, before anything else runs: a cleanup with its own rescue would replace ansible_failed_task and
+# ansible_failed_result. Include variable:
+#   oracle_common_failure_stage  name of the failed stage, e.g. Initialize, Shutdown, Patch
+# The message of a no_log task is already censored by Ansible. The exit code and the last lines of the output are kept
+# when the failed task has them.
+- name: Record the failure of stage {{ oracle_common_failure_stage | default('unknown') }}
+  ansible.builtin.set_fact:
+    oracle_common_failure:
+      stage: "{{ oracle_common_failure_stage | default('unknown') }}"
+      task: "{{ ansible_failed_task.name | default('unknown task') }}"
+      msg: >-
+        {{ (ansible_failed_result | default({})).msg | default('no error message (see the task output above)') | string
+           | truncate(oracle_common_failure_msg_max_length | int, true) }}
+      rc: "{{ (ansible_failed_result | default({})).rc | default('') }}"
+      output_tail: >-
+        {{ (((ansible_failed_result | default({})).stdout_lines | default([], true))
+             + ((ansible_failed_result | default({})).stderr_lines | default([], true)))[-(oracle_common_failure_output_lines | int):]
+           if (oracle_common_failure_output_lines | int) > 0 else [] }}

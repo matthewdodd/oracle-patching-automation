@@ -1,0 +1,50 @@
+---
+# Runs the playbook with only DATABASE_NAME in scope (oracle_patch_databases: [DATABASE_NAME]) while the other database
+# of the same ORACLE_HOME runs, and checks that the shared home check refuses it before anything is stopped or changed:
+# the run fails in that stage with the refusal naming the database out of scope, and the instance and listener processes
+# (same pids), the patches and OPatch of the home and every database's SQL patch registry and history are unchanged.
+# Include variable: molecule_refusal_name (label, also the host state names).
+- name: Record the host state before the run - {{ molecule_refusal_name }}
+  ansible.builtin.include_tasks: ../../shared/tasks/host_state.yml
+  vars:
+    molecule_state_name: "before {{ molecule_refusal_name }}"
+
+- name: Run the playbook with only DATABASE_NAME in scope - {{ molecule_refusal_name }}
+  ansible.builtin.include_tasks: ../../shared/tasks/rerun.yml
+  vars:
+    molecule_rerun_name: "{{ molecule_refusal_name }}"
+    molecule_rerun_extra_vars:
+      oracle_patch_databases: ["{{ DATABASE_NAME }}"]
+
+- name: Check the shared home check refused the run - {{ molecule_refusal_name }}
+  ansible.builtin.assert:
+    that:
+      - molecule_rerun.rc | int == 2
+      - molecule_rerun.recap | length == 4
+      - molecule_rerun.recap[2] == '0'
+      - molecule_rerun.recap[3] == '1'
+      - >-
+        ('Fail: Shared Oracle home check failed on ' ~ inventory_hostname) in molecule_rerun.output
+      - ('Refusing to patch the Oracle home ' ~ molecule_shared_home ~ ' (nothing has been stopped or changed)') in molecule_rerun.output
+      - >-
+        ('running databases use ' ~ molecule_shared_home ~ ' but are not in scope: ' ~ __molecule_out_of_scope) in molecule_rerun.output
+      - >-
+        ('State left behind: databases: ' ~ DATABASE_NAME ~ ' not stopped by this run; Oracle home: not changed by this run') in molecule_rerun.output
+    fail_msg: >-
+      Expected rc 2, "failed=1" and the shared Oracle home refusal naming {{ __molecule_out_of_scope }}; got rc
+      {{ molecule_rerun.rc }}, recap (ok, changed, unreachable, failed) {{ molecule_rerun.recap }}.
+  vars:
+    __molecule_out_of_scope: "{{ molecule_scope | reject('equalto', DATABASE_NAME) | join(', ') }}"
+
+- name: Record the host state after the run - {{ molecule_refusal_name }}
+  ansible.builtin.include_tasks: ../../shared/tasks/host_state.yml
+  vars:
+    molecule_state_name: "after {{ molecule_refusal_name }}"
+
+- name: Check the refused run stopped and changed nothing - {{ molecule_refusal_name }}
+  ansible.builtin.assert:
+    that: molecule_states['before ' ~ molecule_refusal_name] == molecule_states['after ' ~ molecule_refusal_name]
+    fail_msg: >-
+      The refused run changed the databases, listeners or the Oracle home: before
+      {{ molecule_states['before ' ~ molecule_refusal_name] }}; after {{ molecule_states['after ' ~ molecule_refusal_name] }}
+    success_msg: "Unchanged: {{ molecule_states['after ' ~ molecule_refusal_name].processes | length }} processes, the patches and OPatch"

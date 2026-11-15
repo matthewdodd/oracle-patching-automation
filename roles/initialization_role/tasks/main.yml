@@ -1,158 +1,185 @@
 ---
-- set_fact:
+# Prepares a target for patching. Requires oracle_common to have run in the same play (import_role oracle_common).
+#   1. Validate the patch scope and choose this run's working directories (oracle_common preflight_work_dirs.yml:
+#      oracle_common_run, oracle_common_script_env). With oracle_common_unique_work_dirs (default true) every run has
+#      its own script, output and staging directories, so it never touches another run's or another database's files.
+#   2. Package check, database owner check (every running database in scope), group membership (become, no raw sudo).
+#   3. Create the working directories (refusing a generated per-run directory that already exists, recording each so
+#      the cleanup removes only what this run created; fixed or explicitly given directories are removed and
+#      re-created, as before), stage the scripts, detect the database version and resolve the patch bundle.
+- name: Validate the patch scope and choose this run's working directories
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: preflight_work_dirs
+
+# Original fact names, read by oracle_database_patch_role, standalone_control_role and the playbooks.
+- name: Set the database and working directory facts
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] var-naming[pattern] - original fact names, kept for compatibility
     ORACLE_SID: "{{ DATABASE_NAME }}"
-    remote_script_directory: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
-    remote_output_directory: "/tmp/ora_db_patch_{{ DATABASE_NAME }}"
+    remote_script_directory: "{{ oracle_common_run.script_dir }}"
+    remote_output_directory: "{{ oracle_common_run.databases[DATABASE_NAME].work_dir }}"
     missing_packages: []
-    
-- name: Gather the package facts
-  ansible.builtin.package_facts:
-    manager: rpm
+    initialization_role_created_paths: []
 
+# Package list per OS release from the oracle_common OS variable files (RedHat-8/9/10.yml); package facts are
+# gathered only where an rpm package manager is configured (not on AIX).
 - name: Check whether pre-requisite packages are installed
-  set_fact:
-    missing_packages: "{{ missing_packages + [ item ] }}"
-  when: 
-    - item not in ansible_facts.packages
-    - ansible_distribution == "RedHat"
-  with_items:
-  - bc
-  - binutils
-  - compat-libcap1
-  - compat-libstdc++-33
-  - elfutils-libelf
-  - elfutils-libelf-devel
-  - fontconfig-devel
-  - glibc
-  - glibc-devel
-  - ksh
-  - libaio
-  - libaio-devel
-  - libX11
-  - libXau
-  - libXi
-  - libXtst
-  - libXrender
-  - libXrender-devel
-  - libgcc
-  - libstdc++
-  - libstdc++-devel
-  - libxcb
-  - make
-  - smartmontools
-  - sysstat
-  - xorg-x11-xauth
-  #- xorg-x11-utils
-        
-- name: Fail if list is longer than none
-  fail:
-    msg: "Missing package; FAIL DUE TO THESE PACKAGES NOT BEING FOUND: {{ missing_packages }}"
-  when: missing_packages|length>0
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: packages
 
-- name: Init Clean
+# Only for directories used like the original fixed names (oracle_common_unique_work_dirs false, or a directory given
+# explicitly: remote_script_directory, remote_output_directory): remove the directories of an earlier run, as before.
+# Generated per-run directories are new by construction, and one that already exists is refused below.
+- name: Remove the working directories of an earlier run (fixed or explicitly given directories only)
+  when: (oracle_common_run.script_dir_fixed | bool) or (oracle_common_run.output_fixed | bool)
   block:
     - name: Init Clean
-      include_tasks: init_clean.yml
-  ignore_errors: yes
+      ansible.builtin.include_tasks: init_clean.yml
+  rescue:
+    - name: Report the working directories that could not be removed
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: could not remove the working directories of an earlier run
+          ({{ ansible_failed_result.msg | default('no message') }}); they are re-used if this run can write to them.
 
-- name: Validate DB Owner
-  block:
-  - name: Get the DB owner id
-    shell: |
-      ps -ef | grep -v grep | grep ora_pmon_{{ ORACLE_SID }} | awk '{print $1}'
-    register: shell_output
+- name: Validate the owner of every running database in scope
+  ansible.builtin.include_tasks: db_owner.yml
+  loop: "{{ oracle_common_run.scope }}"
+  loop_control:
+    loop_var: __initialization_role_sid
 
-  - name: Validate the DB owner id
-    debug:
-      msg: "Found DB Owner on {{ target }} is: {{ shell_output.stdout }} / Inventory lists DB Owner as: {{ sid_server_dict[ORACLE_SID].dbowner }}"
-    failed_when: shell_output.stdout != sid_server_dict[ORACLE_SID].dbowner
-
+# The database owner and the patch staging owner (oracle_common_patch_owner, the original b_user) join
+# oracle_common_group_name, once each (the original included this task file twice and, when both were the same user,
+# ran it twice for that user). Before the working and staging directories are created, so a shared
+# oracle_common_work_group can already be applied to them.
 - name: Add member to group
+  when: oracle_common_manage_group_membership | bool
   block:
     - name: Add member to group
-      include_tasks: group_membership.yml
-      loop:
-        - "{{sid_server_dict[DATABASE_NAME].dbowner}}"
-      
+      ansible.builtin.include_tasks: group_membership.yml
+      loop: "{{ [sid_server_dict[DATABASE_NAME].dbowner, oracle_common_patch_owner] | unique }}"
+      loop_control:
+        loop_var: __initialization_role_member
+
 - name: Run init
-  become: yes
-  become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
+  become: true
+  become_user: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
   block:
-    - name: Create {{ remote_script_directory }}
-      ansible.builtin.file:
-        path: "{{ remote_script_directory }}"
-        state: directory
-        mode: "{{ script_permission }}"
+    - name: Create the script directory of this run
+      ansible.builtin.include_tasks: run_dir.yml
+      vars:
+        __initialization_role_dir: "{{ remote_script_directory }}"
+        __initialization_role_dir_owner: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
+        __initialization_role_dir_remove: true
+        __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed | bool }}"
 
     - name: Create roles/oracle_database_patch_role/files if not exist
-      copy: 
-        src: roles/oracle_database_patch_role/files/ 
-        dest: "{{ remote_script_directory }}/oracle_database_patch_role" 
-        mode: "{{ script_permission }}"
+      ansible.builtin.copy:
+        # role_path-based so the source does not depend on the playbook directory.
+        src: "{{ role_path }}/../oracle_database_patch_role/files/"
+        dest: "{{ remote_script_directory }}/oracle_database_patch_role"
+        mode: "{{ oracle_common_modes.script }}"
+        directory_mode: "{{ oracle_common_modes.dir }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
 
-    - name: Create {{ remote_output_directory }}
-      ansible.builtin.file:
-        path: "{{ remote_output_directory }}"
-        state: directory
-        mode: "{{ script_permission }}"
-
-    - set_fact:
-        patch_file_prefix: "{{ 'AIX' if ansible_distribution == 'AIX' else 'LINUX' }}"
-        
-    - set_fact:
-        patch_file_name: "{{ patch_file_prefix }}_jan{{ (ansible_date_time.year|string)[-2:] }}.tar.gz"
-
-    - debug:
-        msg: "The patch_file_name is: {{ patch_file_name }}"
+    # The working directory of DATABASE_NAME first (the others are inside it). Logs and script output are kept after
+    # the run, as before.
+    - name: Create the working directory of each database in scope
+      ansible.builtin.include_tasks: run_dir.yml
+      vars:
+        __initialization_role_dir: "{{ oracle_common_run.databases[__initialization_role_sid].work_dir }}"
+        __initialization_role_dir_owner: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
+        __initialization_role_dir_remove: false
+        __initialization_role_dir_fixed: "{{ oracle_common_run.output_fixed | bool }}"
+      loop: "{{ oracle_common_run.scope }}"
+      loop_control:
+        loop_var: __initialization_role_sid
 
     - name: Get database version
-      shell: |
-        {{ remote_script_directory }}/oracle_database_patch_role/database_version.bash {{ ORACLE_SID }}
-      register: shell_output
-      failed_when: shell_output.rc != 0
+      ansible.builtin.command:
+        argv:
+          - "{{ remote_script_directory }}/oracle_database_patch_role/database_version.bash"
+          - "{{ ORACLE_SID }}"
+      environment: "{{ oracle_common_script_env[DATABASE_NAME] }}"
+      register: __initialization_role_db_version
+      changed_when: false
 
     - name: Ingest database version information
       ansible.builtin.slurp:
-        src: "/tmp/ora_db_patch_{{ ORACLE_SID }}/db_version.txt"
-      register: db_ver_slurp
+        src: "{{ remote_output_directory }}/db_version.txt"
+      register: __initialization_role_db_version_file
 
-    - set_fact:
-        db_ver_long: "{{ db_ver_slurp['content']|b64decode|trim }}"
-        
-    - set_fact:
-        db_ver: "{{ db_ver_long[:4] }}"
-        
-    - set_fact:
-        artf_ver: "{{ '19.0.0' if db_ver == '19.0' else ( '12.2.0.1' if db_ver == '12.2' else '12.1.0.2' ) }}"
-        
-    - set_fact:
-        #artifactory_repo: "https://artifactory.domain.com/artifactory/release/oracledatabase/{{ artf_ver }}"
+    - name: Set the detected database version
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact name, kept for compatibility
+        db_ver_long: "{{ __initialization_role_db_version_file['content'] | b64decode | trim }}"
 
-    - debug:
-        msg: "The artifactory_repo is: {{ artifactory_repo }}"
+    # v$instance.version_full (18c and later), written by database_version.bash next to db_version.txt. Missing or
+    # empty (12.1/12.2, or an older script) means "not available": the version is then selected by db_ver_long.
+    - name: Check for the database version_full information
+      ansible.builtin.stat:
+        path: "{{ remote_output_directory }}/db_version_full.txt"
+        get_checksum: false
+      register: __initialization_role_db_version_full_stat
 
-    - set_fact:
-        patch_folder_prefix: "{{ '/u01/oracle' if is_grid_layout == 'false' else '/u02/grid' }}"
-        b_user: "{{ 'oracle' if is_grid_layout == 'false' else 'grid' }}"
-        
-    - set_fact:
-        patch_folder_name: "{{ patch_folder_prefix }}/software_dir/{{ db_ver }}/jan{{ (ansible_date_time.year|string)[-2:] }}_{{ ORACLE_SID }}"
+    - name: Ingest database version_full information
+      ansible.builtin.slurp:
+        src: "{{ remote_output_directory }}/db_version_full.txt"
+      register: __initialization_role_db_version_full_file
+      when:
+        - __initialization_role_db_version_full_stat.stat.exists | default(false)
+        - __initialization_role_db_version_full_stat.stat.isreg | default(false)
 
-    - name: Check for Sanity
-      block:
-      - set_fact:
-          #repo_check: "{{ artifactory_repo[81:85] }}"
-          repo_check: "{{ artifactory_repo[83:87] }}"
-          folder_check: "{{ patch_folder_name[40:44] }}"
-  
-      - name:
-        fail:
-          msg: "Repo ({{ repo_check }}) and folder ({{ folder_check }}) version mismatch. Validate and retry"
-        when: repo_check != folder_check
+    # Selects the vars/oracle_versions/<version>.yml entry of oracle_common for the detected version (12.1,
+    # 12.2, 19, 23ai, 26ai): by version_full when the database reports one (so 26ai, release update 23.26 and later,
+    # is told apart from 23ai, which both report 23.0.0.0.0 as version), else by db_ver_long. An explicit
+    # oracle_common_db_version (alias oracle_patch_db_version) still wins. An unknown version stops here instead
+    # of falling back to the 12.1 artifacts.
+    - name: Select the Oracle version
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: oracle_version_select
+      vars:
+        oracle_common_detected_version: "{{ db_ver_long }}"
+        oracle_common_detected_version_full: >-
+          {{ (__initialization_role_db_version_full_file.content | b64decode | trim)
+             if (__initialization_role_db_version_full_file.content is defined) else '' }}
 
-- name: Add member to group
-  block:
-    - name: Add member to group
-      include_tasks: group_membership.yml
-      loop:
-        - "{{ b_user }}"
+    # db_ver stays the first four characters of v$instance.version (e.g. 19.0), as before: it names the staging
+    # directory <prefix>/software_dir/<db_ver>/... and drives the AIX 12.1 checks.
+    - name: Set the database version facts
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact names, kept for compatibility
+        db_ver: "{{ oracle_common_detected_release }}"
+        artf_ver: "{{ oracle_common_oracle_version.artifact_dir }}"
+
+    # Resolves the patch file name (<AIX|LINUX>_<cycle><year>.tar.gz by default, the original
+    # <AIX|LINUX>_jan<YY>.tar.gz), the repository URL (oracle_common_patch_repo_url, alias artifactory_repo; required),
+    # the staging directory and its owner, and compares the repository release folder with the detected version
+    # (replaces the original fixed-offset "Check for Sanity").
+    - name: Resolve the patch bundle and check for sanity
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: patch_artifact
+
+    # The staging directory carries "_<run id>" with per-run directories (unless patch_folder_name or
+    # oracle_common_patch_staging_dir was given explicitly).
+    - name: Set the patch bundle facts
+      ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] - original fact names, kept for compatibility
+        patch_file_prefix: "{{ oracle_common_artifact_platform }}"
+        patch_file_name: "{{ oracle_common_patch.file_name }}"
+        patch_folder_prefix: "{{ oracle_common_patch.base_dir }}"
+        b_user: "{{ oracle_common_patch.owner }}"
+        patch_folder_name: "{{ __oracle_common_run_staging_dir }}"
+
+    - name: Validate the staging directory of this run
+      ansible.builtin.assert:
+        that:
+          - patch_folder_name is match(__oracle_common_re_abs_path)
+          - patch_folder_name is not search(__oracle_common_re_dotdot)
+        fail_msg: "Invalid patch staging directory for this run: {{ patch_folder_name }}"
+        success_msg: "The patch_file_name is: {{ patch_file_name }}; staged in {{ patch_folder_name }} by {{ b_user }}"
+
+    - name: Add the Oracle version settings to the script environment
+      ansible.builtin.include_role:
+        name: oracle_common
+        tasks_from: preflight_script_env

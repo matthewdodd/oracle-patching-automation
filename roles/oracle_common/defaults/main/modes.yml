@@ -1,0 +1,19 @@
+---
+# Least-privilege permission modes and ownership of what the playbooks create on a target. Every mode is validated by
+# tasks/validate.yml: an octal mode without group or world write access (an unquoted YAML mode such as 0777 is read as
+# the integer 511 and is normalised to the octal string "0777" before it is checked, so it is rejected too). 0777 is not
+# allowed anywhere. Quote modes, e.g. "0750".
+#
+# Copied scripts. The original name script_permission is accepted as an alias (the original 0777 is rejected). The
+# scripts run as the database owner, who owns them: 0750 (owner rwx, group r-x, others nothing).
+oracle_common_script_permission: "{{ script_permission | default('0750') }}"
+# Working, output and staging directories (created by the database owner, or by the patch staging owner for the patch
+# staging directory). Default 0750: nobody but the owner and the group can list or enter them.
+oracle_common_dir_mode: "0750"
+# The downloaded patch bundle (read by the staging owner only until it is extracted). Default 0640.
+oracle_common_file_mode: "0640"
+# Group of the directories and files above. Empty (the default): the creating user's primary group. Set it to the
+# group the database owner and the patch staging owner share (e.g. the Oracle inventory group, or
+# oracle_common_group_name) when they are different users (Grid layout), so the database owner can read the patch the
+# staging owner extracted; the creating user must be a member of that group.
+oracle_common_work_group: ""

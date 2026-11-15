@@ -1,0 +1,118 @@
+#!/bin/bash
+#
+# TEST STUB - NOT ORACLE SOFTWARE. Molecule stand-in for <ORACLE_HOME>/OPatch/opatch. It is installed in the fake homes
+# (older OPATCH_VERSION, molecule/shared/tasks/fake_home.yml) and shipped in the fake patch bundle (newer OPATCH_VERSION,
+# molecule/shared/files/build_patch_bundle.bash), so database_patch.bash's OPatch upgrade runs. Commands:
+#   opatch version                                       OPATCH_VERSION from version.txt next to this script
+#   opatch lspatches                                     the patches applied to this home ("<id>;<title>")
+#   opatch prereq CheckConflictAgainstOHWithDetail -ph . conflict check of the patch folder in the current directory
+#   opatch apply -silent <patch folder>                  records the patch in <ORACLE_HOME>/install/
+#                                                        molecule_applied_patches; refused as root, while any process
+#                                                        runs from this home (database or listener), or for a patch
+#                                                        that is already applied (as OPatch does)
+# Successful runs end with "OPatch succeeded.", the line database_patch.bash checks.
+set -u
+
+opatch_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P) || exit 1
+oracle_home=$(dirname -- "$opatch_dir")
+registry="$oracle_home/install/molecule_applied_patches"
+
+version() {
+  sed -n 's/^OPATCH_VERSION://p' "$opatch_dir/version.txt" 2>/dev/null | tr -d '[:space:]'
+}
+
+# Executables of running processes that belong to this home (/proc/<pid>/exe, readable for the caller's processes).
+active_executables() {
+  local f exe
+  for f in /proc/[0-9]*/exe; do
+    exe=$(readlink -- "$f" 2>/dev/null) || continue
+    case $exe in
+      "$oracle_home"/*) printf '%s\n' "$exe" ;;
+    esac
+  done | sort -u
+}
+
+readme_title() {
+  sed -n 's:.*<title>\(.*\)</title>.*:\1:p' "$1/README.html" | head -n 1
+}
+
+cmd_version() {
+  echo "OPatch Version: $(version)"
+  echo ""
+  echo "OPatch succeeded."
+}
+
+cmd_lspatches() {
+  if [[ -s $registry ]]; then
+    cat -- "$registry"
+  else
+    echo "There are no Interim patches installed in this Oracle Home \"$oracle_home\"."
+  fi
+  echo ""
+  echo "OPatch succeeded."
+}
+
+cmd_prereq() {
+  local folder
+  folder=$(pwd -P)
+  echo "Invoking prereq \"checkconflictagainstohwithdetail\" (OPatch $(version), test stub)"
+  if [[ ${1:-} != CheckConflictAgainstOHWithDetail || ${2:-} != -ph || ! -f $folder/README.html ]]; then
+    echo "Prereq \"checkConflictAgainstOHWithDetail\" failed: no patch in $folder (test stub)."
+    echo "OPatch failed with error code 73"
+    return 73
+  fi
+  echo "Prereq \"checkConflictAgainstOHWithDetail\" passed."
+  echo ""
+  echo "OPatch succeeded."
+}
+
+cmd_apply() {
+  local folder=${2:-} id active
+  if [[ $(id -u) -eq 0 ]]; then
+    echo "OPatch must not be run as root (test stub)."
+    return 1
+  fi
+  if [[ ${1:-} != -silent || -z $folder || ! -f $folder/README.html ]]; then
+    echo "usage: opatch apply -silent <patch folder> (test stub); no README.html in '$folder'"
+    echo "OPatch failed with error code 1"
+    return 1
+  fi
+  id=$(basename -- "$folder")
+  active=$(active_executables)
+  if [[ -n $active ]]; then
+    echo "Prerequisite check \"CheckActiveFilesAndExecutables\" failed."
+    echo "Following executables are active :"
+    printf '%s\n' "$active"
+    echo "OPatch failed with error code 73"
+    return 73
+  fi
+  mkdir -p -- "$oracle_home/install" || return 1
+  if [[ -f $registry ]] && grep -q "^${id};" "$registry"; then
+    echo "Patch $id is already applied to $oracle_home (test stub)."
+    echo "OPatch failed with error code 73"
+    return 73
+  fi
+  echo "Applying interim patch '$id' to OH '$oracle_home' (OPatch $(version), test stub)"
+  printf '%s;%s\n' "$id" "$(readme_title "$folder")" >>"$registry" || return 1
+  echo "Patch $id successfully applied."
+  echo ""
+  echo "OPatch succeeded."
+}
+
+main() {
+  local cmd=${1:-}
+  shift || true
+  case $cmd in
+    version) cmd_version ;;
+    lspatches) cmd_lspatches ;;
+    prereq) cmd_prereq "$@" ;;
+    apply) cmd_apply "$@" ;;
+    *)
+      echo "usage: opatch version | lspatches | prereq CheckConflictAgainstOHWithDetail -ph . | apply -silent <folder> (test stub)"
+      return 1
+      ;;
+  esac
+}
+
+main "$@"
+exit $?

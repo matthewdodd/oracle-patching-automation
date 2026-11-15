@@ -1,0 +1,44 @@
+---
+# Checks one Oracle home after converge (include variable molecule_home_check: {path, patched, ojvm}):
+#   patched  the Release Update is applied (opatch lspatches), OPatch was upgraded from the bundle and the previous
+#            OPatch kept (OPatch.bak.<timestamp>, never deleted); otherwise nothing was applied and OPatch is unchanged
+#   ojvm     the OJVM patch is applied too (a database in scope has Java components)
+- name: List the patches of {{ molecule_home_check.path }}
+  ansible.builtin.command:
+    argv: ["{{ molecule_home_check.path }}/OPatch/opatch", lspatches]
+  become: true
+  become_user: oracle
+  register: __molecule_home_lspatches
+  changed_when: false
+
+- name: Find the OPatch backups of {{ molecule_home_check.path }}
+  ansible.builtin.find:
+    paths: "{{ molecule_home_check.path }}"
+    patterns: "OPatch.bak.*"
+    file_type: directory
+  register: __molecule_home_backups
+
+- name: Read the OPatch versions of {{ molecule_home_check.path }}
+  ansible.builtin.slurp:
+    src: "{{ item }}/version.txt"
+  loop: "{{ [molecule_home_check.path ~ '/OPatch'] + (__molecule_home_backups.files | map(attribute='path') | list) }}"
+  register: __molecule_home_versions
+
+- name: Check the patches and OPatch of {{ molecule_home_check.path }}
+  ansible.builtin.assert:
+    that:
+      - (__molecule_patches | select('match', molecule_patch.ru_id ~ ';') | list | length) == (1 if molecule_home_check.patched else 0)
+      - (__molecule_patches | select('match', molecule_patch.ojvm_id ~ ';') | list | length) == (1 if molecule_home_check.ojvm else 0)
+      - "'OPatch succeeded.' in __molecule_home_lspatches.stdout_lines"
+      - __molecule_versions[0] == (molecule_patch.new_opatch_version if molecule_home_check.patched else molecule_patch.old_opatch_version)
+      - __molecule_home_backups.matched == (1 if molecule_home_check.patched else 0)
+      - __molecule_versions[1:] | reject('equalto', molecule_patch.old_opatch_version) | list | length == 0
+    fail_msg: >-
+      {{ molecule_home_check.path }}: lspatches {{ __molecule_home_lspatches.stdout_lines }}; OPatch versions (current, then
+      backups) {{ __molecule_versions }}
+    success_msg: "{{ molecule_home_check.path }}: {{ __molecule_patches | join(', ') or 'no patch' }}; OPatch {{ __molecule_versions[0] }}"
+  vars:
+    __molecule_patches: "{{ __molecule_home_lspatches.stdout_lines | select('match', '[0-9]+;') | list }}"
+    __molecule_versions: >-
+      {{ __molecule_home_versions.results | map(attribute='content') | map('b64decode')
+         | map('regex_replace', '\A\s*OPATCH_VERSION:\s*(\S+)\s*\Z', '\1') | list }}

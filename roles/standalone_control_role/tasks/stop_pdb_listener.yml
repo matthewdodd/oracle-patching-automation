@@ -1,31 +1,29 @@
 ---
-##This script stops the PDB listener
+## This script stops the PDB listener. Logged as before; exit code kept (0 = stopped, 4 = already stopped,
+## anything else fails), see stop_listener.yml.
 
-- name: copy PDB listener script to {{ server_name }}
-  copy:
-    src: "{{ stop_pdbListener_script }}"
-    dest: "{{ remote_script_directory }}/{{ stop_pdbListener_script }}"
-    mode: "{{script_permission}}"
-    force: yes
+- name: Stopping PDB listener for {{ ORACLE_SID ~ ' on ' ~ server_name }}
+  ansible.builtin.command:
+    argv:
+      - "{{ oracle_common_bash_path | default('/usr/bin/bash') }}"
+      - -c
+      # Static script; the values are passed as positional parameters, never interpolated into it.
+      - set -o pipefail; "$1" stop "$2" "$3" 2>&1 | tee "$4.$(date +%Y.%m.%d)"
+      - stop_pdb_listener
+      - "{{ remote_script_directory }}/{{ standalone_control_role_stop_pdb_listener_script }}"
+      - "{{ ORACLE_SID }}"
+      - "{{ sid_server_dict[standalone_control_role_sid_key].pdbListener }}"
+      - "{{ remote_output_directory }}/log.{{ standalone_control_role_stop_pdb_listener_script }}"
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
-
-- name: Stopping PDB listener for {{ ORACLE_SID }} on {{ server_name }}
-  shell:
-  vars:
-    #PDB_NAME: "{{ sid_server_dict[ORACLE_SID].pdb }}"
-    PDB_LISTENER: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"    
-  args:
-    executable: /usr/bin/bash
-    cmd: >
-      {{ remote_script_directory }}/{{ stop_pdbListener_script }} stop {{ORACLE_SID}} {{PDB_LISTENER}} 
-      2>&1 | tee {{ remote_output_directory }}/log.{{ stop_pdbListener_script }}.`date +"%Y.%m.%d"`
-  delegate_to: "{{ server_name }}"
-  register: listener_stop_status
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_pdb_listener_stop_status
+  changed_when: standalone_control_role_pdb_listener_stop_status.rc == 0
+  failed_when: standalone_control_role_pdb_listener_stop_status.rc not in [0, 4]
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
 
 - name: Show stop pdb listener script status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ listener_stop_status.stdout_lines }}"
-
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_pdb_listener_stop_status.stdout_lines }}"

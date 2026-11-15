@@ -1,0 +1,99 @@
+---
+# prod environment configuration (skeleton). Every "<CHANGE_ME>" is a placeholder that the input validation rejects
+# (roles/oracle_common tasks/validate.yml rejects any oracle_common_* value that still contains it), so nothing runs
+# until it is replaced. Variable reference: README.md ("Variable reference"), roles/*/meta/argument_specs.yml and
+# roles/oracle_common/defaults/main/*.yml. Layout and vault steps: inventory/README.md.
+#
+# Each required value below is written as "{{ <original input name> | default('<CHANGE_ME>') }}" so that existing job
+# templates that still pass the original name (artifactory_repo, oracle_patch_checksum, GROUP_NAME) keep working:
+# replace only the '<CHANGE_ME>' inside the quotes. A plain value (oracle_common_patch_repo_url: https://...) also
+# works, but then the original input name is ignored for this environment. An extra var (-e / AAP) of the
+# oracle_common_* name always wins over this file.
+
+# --- Connection -----------------------------------------------------------------------------------------------------
+# Account Ansible connects as (default: the user running ansible-playbook / the AAP machine credential).
+# ansible_user: <connection user>
+# ansible_python_interpreter: /usr/bin/python3.12     # targets need Python 3.9 or later (RHEL 8: an AppStream python)
+# SSH host keys are verified (ansible.cfg host_key_checking = True). Keep the targets' keys in the controller's
+# known_hosts, or name a managed file:
+# ansible_ssh_common_args: "-o UserKnownHostsFile=/etc/ansible/known_hosts.prod"
+# Becoming the database owner (an unprivileged user) needs one of (see ansible.cfg): the 'acl' package (setfacl) on
+# Linux targets; or a group shared by the connection user and the database owner (AIX, or no setfacl):
+# ansible_common_remote_group: "{{ oracle_common_group_name }}"
+# or connecting as root. Never set ansible_become_user: it overrides the become_user of every task.
+# The become method (sudo, pbrun, dzdo, ...) comes from ansible_become_method (default sudo).
+
+# --- Required -------------------------------------------------------------------------------------------------------
+# https base URL of the patch repository, holding one folder per Oracle release (12.1.0.2, 12.2.0.1, 19.0.0, 23.0.0,
+# 26.0.0); the release folder is appended unless the URL comes from artifactory_repo (which names it already).
+oracle_common_patch_repo_url: "{{ artifactory_repo | default('<CHANGE_ME>') }}"
+# Checksum of the patch bundle: <algorithm>:<hex digest> (md5, sha1, sha224, sha256, sha384 or sha512 with exactly that
+# algorithm's digest length; sha256 recommended) or <algorithm>:<https URL of a checksum file>, from a trusted source.
+# It changes with every patch cycle, so it is usually passed per job (-e oracle_common_patch_checksum=... or the AAP
+# survey); this value is the fallback.
+oracle_common_patch_checksum: "{{ oracle_patch_checksum | default('<CHANGE_ME>') }}"
+# OS group (POSIX name) the database owner and the patch staging owner (oracle / grid) are added to.
+oracle_common_group_name: "{{ GROUP_NAME | default('<CHANGE_ME>') }}"
+# Where group membership is managed elsewhere (LDAP/IdM, images): set this false instead and delete the line above
+# (any oracle_common_* value that still contains the placeholder is rejected, even when it is not used).
+# oracle_common_manage_group_membership: true
+
+# --- Optional (defaults shown) --------------------------------------------------------------------------------------
+# Patch bundle: <AIX|LINUX>_<cycle><year>.tar.gz; year = the target's current year (two digits) unless set.
+# oracle_common_patch_cycle: jan                      # alias oracle_patch_cycle (e.g. jan, apr, jul, oct)
+# oracle_common_patch_year: "26"                      # alias oracle_patch_year
+# oracle_common_patch_file_name: LINUX_jan26.tar.gz   # explicit name; aliases oracle_patch_file_name, patch_file_name
+# Download transport (the bundle's checksum is verified either way).
+# oracle_common_patch_ca_path: /etc/pki/ca-trust/source/anchors/<site CA>.pem   # PEM on the target (internal CA)
+# oracle_common_patch_validate_certs: true            # false only knowingly; prefer the CA path above
+# PRODUCTION: never turn oracle_common_patch_validate_certs off or oracle_common_patch_repo_allow_http on for the group.
+# oracle_common_patch_use_proxy: false
+# oracle_common_patch_proxy: http://<proxy host>:<port>
+# Layout and staging.
+# oracle_common_is_grid_layout: false                 # alias is_grid_layout ("true"/"false" strings accepted)
+# oracle_common_patch_base_dir_oracle: /u01/oracle
+# oracle_common_patch_base_dir_grid: /u02/grid
+# oracle_common_patch_owner_oracle: oracle
+# oracle_common_patch_owner_grid: grid
+# oracle_common_staging_base: /u01/oracle/ansible_patch_work   # default: <oracle_common_patch_base_dir_oracle>/ansible_patch_work
+# oracle_common_env_dir: /local                       # directory of the <SID>.env files
+# oracle_common_oratab: /etc/oratab                   # alias oracle_patch_oratab
+# Least-privilege modes (quoted; group- or world-writable modes such as 0777 are rejected).
+# oracle_common_script_permission: "0750"             # alias script_permission
+# oracle_common_dir_mode: "0750"
+# oracle_common_file_mode: "0640"
+# oracle_common_work_group: ""                        # Grid layout: the group the database owner and grid share
+# Oracle version selection (needed to tell 26ai from 23ai, see README.md "Supported Oracle versions").
+# oracle_common_db_version: 26ai                      # alias oracle_patch_db_version
+# oracle_common_oracle_version_overrides:
+#   "26ai": {artifact_dir: "26.0.0", datapatch_startup_mode: upgrade}
+# Safety toggles (README.md "Shared ORACLE_HOME" and "Patch already applied").
+# PRODUCTION: keep the secure defaults below for the group; set an opt-in per reviewed job (-e) if ever needed.
+# oracle_common_allow_shared_home_partial: false      # alias oracle_patch_allow_shared_home_partial
+# oracle_common_fail_when_already_applied: false      # alias oracle_patch_fail_when_already_applied
+# oracle_common_unique_work_dirs: true                # alias oracle_patch_unique_work_dirs
+# oracle_common_patch_timeout: 14400                  # alias oracle_patch_apply_timeout
+# Teams card job link (AAP 2.5 and later: /execution/jobs/playbook/).
+# oracle_common_notify_aap_base_url: https://<AAP host>   # alias aap_base_url
+# oracle_common_notify_job_url_path: /#/jobs/playbook/
+# oracle_common_notify_proxy: http://<proxy host>:<port>  # alias notify_proxy
+# ServiceNow (README.md "ServiceNow change check").
+# oracle_common_ticket_required: false
+# oracle_common_snow_proxy: http://<proxy host>:<port>    # alias snow_proxy
+# oracle_common_snow_allowed_state_min: -2
+# oracle_common_snow_allowed_state_max: -1
+
+# --- Secrets (Ansible Vault, vault id "prod") ------------------------------------------------------------------------
+# The secrets live in an encrypted vault.yml next to this file (see vault.yml.example and inventory/README.md). These
+# mappings are wired: once vault.yml exists and is decrypted with --vault-id prod@prompt (or the AAP Vault credential),
+# its vault_* values take effect. They are the same expressions as the role defaults, so the original input names
+# (teams_webhook_url, snow_instance, snow_user, snow_password) still win when a job passes them. Without vault.yml:
+# no Teams notification (skipped with a message), no repository credentials, and the ServiceNow change check fails
+# unless the job sets override_chg.
+oracle_common_notify_webhook_url: "{{ teams_webhook_url | default(vault_teams_webhook_url | default('')) }}"
+oracle_common_snow_instance: "{{ snow_instance | default(vault_snow_instance | default('')) }}"
+oracle_common_snow_username: "{{ snow_user | default(vault_snow_user | default('')) }}"
+oracle_common_snow_password: "{{ snow_password | default(vault_snow_password | default('')) }}"
+# Patch repository credentials for HTTP basic authentication (set both or neither; empty: none are sent).
+oracle_common_patch_repo_username: "{{ vault_patch_repo_username | default('') }}"
+oracle_common_patch_repo_password: "{{ vault_patch_repo_password | default('') }}"

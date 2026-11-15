@@ -1,0 +1,51 @@
+---
+# Test fixture: a complete set of valid inputs (example values only: example.com hosts, a fake but well-formed,
+# non-zero digest). tests/validation.yml starts every case from these values; each case changes some of them.
+# validation_baseline holds every value a case may change, so the case runner can restore it afterwards. Only
+# leaf inputs are listed: derived values (remote_*_directory, env file, patch base dir and owner) keep their role
+# defaults, so a case that changes e.g. oracle_common_staging_base also exercises the derived paths. The legacy
+# alias names (script_permission, GROUP_NAME, artifactory_repo, ...) are tested in tests/aliases.yml.
+validation_baseline:
+  target: dbhost01.example.com,dbhost02.example.com
+  DATABASE_NAME: ORCL01
+  TICKET_NUMBER: CHG0030001
+  override_chg: "false"
+  sid_server_dict:
+    ORCL01:
+      dbowner: oracle
+      pdb: orclpdb1
+      dbvip: dbhost01-vip.example.com
+      dbListener: LISTENER_ORCL01
+      pdbListener: LISTENER_ORCLPDB1
+  oracle_common_ticket_required: false
+  oracle_common_ticket_number_regex: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+  oracle_common_patch_repo_url: https://repo.example.com/artifactory/release/oracledatabase
+  oracle_common_patch_repo_allow_http: false
+  oracle_common_patch_checksum: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  oracle_common_manage_group_membership: true
+  oracle_common_group_name: oracle_automation
+  oracle_common_check_packages: true
+  oracle_common_is_grid_layout: "false"
+  oracle_common_script_permission: "0755"
+  oracle_common_staging_base: /tmp
+  oracle_common_env_dir: /local
+  oracle_common_patch_base_dir_oracle: /u01/oracle
+  oracle_common_patch_base_dir_grid: /u02/grid
+  oracle_common_patch_staging_dir: ""
+  oracle_common_patch_cycle: jan
+  oracle_common_patch_year: "26"
+  oracle_common_patch_file_name: ""
+  oracle_common_dir_mode: "0750"
+  oracle_common_file_mode: "0640"
+  oracle_common_work_group: ""
+  oracle_common_group_membership_become_user: root
+  oracle_common_group_add_command: [/bin/gpasswd, --add]
+  oracle_common_group_members_command: [/usr/bin/getent, group]
+  oracle_common_group_members_regex: '\A[^:]*:[^:]*:[^:]*:(.*)\Z'
+  oracle_common_patch_validate_certs: true
+  oracle_common_patch_ca_path: ""
+  oracle_common_patch_use_proxy: false
+  oracle_common_patch_proxy: ""
+  oracle_common_patch_repo_username: ""
+  oracle_common_patch_repo_password: ""
+  oracle_common_patch_force_basic_auth: true

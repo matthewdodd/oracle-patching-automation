@@ -1,0 +1,26 @@
+---
+# Removes one path this run created (include variable __oracle_database_patch_role_path: {path, owner}) as the user
+# who created it, then (as the original cleanup did for the script directory) as the connection user. A path neither
+# can remove is reported as a WARNING with the error.
+- name: Remove {{ __oracle_database_patch_role_path.path }}
+  block:
+    - name: Remove the path as the user who created it {{ __oracle_database_patch_role_path.path }}
+      become: true
+      become_user: "{{ __oracle_database_patch_role_path.owner }}"
+      ansible.builtin.file:
+        path: "{{ __oracle_database_patch_role_path.path }}"
+        state: absent
+  rescue:
+    - name: Retry as the connection user {{ __oracle_database_patch_role_path.path }}
+      block:
+        - name: Remove the path as the connection user {{ __oracle_database_patch_role_path.path }}
+          ansible.builtin.file:
+            path: "{{ __oracle_database_patch_role_path.path }}"
+            state: absent
+      rescue:
+        - name: Report the path that could not be removed {{ __oracle_database_patch_role_path.path }}
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: could not remove {{ __oracle_database_patch_role_path.path }} (created by this run) as
+              {{ __oracle_database_patch_role_path.owner }} or as the connection user
+              ({{ ansible_failed_result.msg | default('no message') }}); remove it manually.

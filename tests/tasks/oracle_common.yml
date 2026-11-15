@@ -1,0 +1,8 @@
+---
+# Runs one task file of roles/oracle_common (test_tasks_from) for the test playbooks; every test goes through this
+# file. The role is found by name through tests/roles, a symbolic link to ../roles (Ansible looks for roles in the
+# roles/ directory next to the playbook; ansible.cfg sets no roles_path); the task file is one of the role's own.
+- name: Run a task file of roles/oracle_common, {{ test_tasks_from }}
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: "{{ test_tasks_from }}"

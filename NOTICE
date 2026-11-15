@@ -1,0 +1,93 @@
+Oracle Database patching automation - licensing notice
+======================================================
+
+Licence of this repository
+--------------------------
+
+The automation code in this repository (Ansible playbooks, roles, task files,
+variable files, argument specifications, shell scripts, tests, test stubs,
+inventory skeletons and documentation) is free software: you can redistribute
+it and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version (SPDX: GPL-3.0-or-later).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+The full licence text is in the LICENSE file, and is also available at
+<https://www.gnu.org/licenses/gpl-3.0.html>.
+
+The GPL grant covers only the material written by this project. It does not
+cover, and grants no rights to, the third-party software and formats described
+below.
+
+Oracle software and formats
+---------------------------
+
+This repository does not include, and grants no rights to, Oracle Database
+software, OPatch, datapatch, SQL*Plus, lsnrctl, Oracle patches (Release
+Updates, OJVM Release Updates or any other patch or patch bundle) and their
+README files, the Oracle Universal Installer, root.sh or any other
+Oracle-supplied script or SQL file (such as utlrp.sql), or the Oracle
+installer response-file format and its key names. These remain under Oracle's
+licence terms. You must obtain your own licence for them from Oracle and
+comply with its terms. The automation only drives Oracle software that you
+have licensed and placed in your own artifact repository.
+
+Red Hat and IBM software
+------------------------
+
+Red Hat Enterprise Linux (and rebuilds such as Oracle Linux, Rocky Linux and
+AlmaLinux), IBM AIX and the operating-system packages and filesets the
+automation checks for or uses are licensed by their owners (Red Hat, IBM,
+Oracle or the package authors) under their own terms. Nothing in this
+repository grants any right to them.
+
+Artifacts and dependencies obtained at run time
+-----------------------------------------------
+
+Artifacts the automation downloads from your artifact repository (patch
+bundles, Release Updates, OJVM patches, OPatch and any other files) keep their
+own licences. The Ansible collections listed in collections/requirements.yml
+(and any collection file used by the tests), and the Python packages listed in
+requirements.txt (and any test requirements file), are not part of this
+repository; they are installed separately and are licensed by their authors
+under their own terms. ServiceNow and Microsoft Teams are third-party services
+used under their own terms.
+
+Files not covered, or covered only in part, by the GPL grant
+------------------------------------------------------------
+
+An audit of this repository found no file copied from Oracle-, Red Hat- or
+IBM-owned material: there is no copy of an Oracle patch, README, SQL script,
+response-file template or binary, and no copy of a Red Hat or IBM script or
+binary. The following file is written by this project but reproduces parts of
+an Oracle-defined format. It is covered by the GPL only to the extent this
+project authored it:
+
+- roles/oracle_database_patch_role/files/database_patch.bash
+  Its qopiprep mode (AIX, Oracle Database 12.1 only) recreates the
+  OPATCH_XML_INV external table. The table definition (column, access
+  parameters, preprocessor and file names) and the SYS.DBMS_QOPATCH and
+  DBMS_SQLPATCH interfaces it calls are defined by Oracle and remain subject
+  to Oracle's terms. The script's own logic, structure and comments are
+  project code under the GPL.
+
+The test stubs in tests/shell/stubs/ (sqlplus, opatch, datapatch, lsnrctl and
+the system commands df, mount, ps and uname) are not Oracle, Red Hat or IBM
+software. They are project code that only imitates the command names and the
+output the scripts rely on, and they are covered by the GPL grant like the rest
+of the repository. The same applies to any stub used by Molecule scenarios.
+
+Trademarks
+----------
+
+Oracle and Java are registered trademarks of Oracle and/or its affiliates. Red Hat and Red Hat Enterprise Linux (RHEL) are trademarks or
+registered trademarks of Red Hat, LLC or its subsidiaries in the United States
+and other countries. Ansible is a registered trademark of Red Hat, LLC. IBM and
+AIX are trademarks of International Business Machines Corporation, registered
+in many jurisdictions worldwide. Microsoft Teams is a trademark of the
+Microsoft group of companies. ServiceNow is a trademark of ServiceNow, Inc.
+Other names may be trademarks of their respective owners. Their use here is
+only to identify the software the automation works with and does not imply
+endorsement by, or affiliation with, their owners.

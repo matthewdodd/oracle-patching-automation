@@ -1,0 +1,19 @@
+---
+# OS group membership (the original behaviour): the database owner (sid_server_dict[<SID>].dbowner) and the
+# patch staging owner (oracle or grid) are added to oracle_common_group_name. Set
+# oracle_common_manage_group_membership to false where membership is managed elsewhere (LDAP/IdM, images).
+oracle_common_manage_group_membership: true
+# Required while membership is managed: there is no generic group name (the original hard-coded a site group).
+# The original variable name GROUP_NAME is accepted as an alias.
+oracle_common_group_name: "{{ GROUP_NAME | default('') }}"
+# The membership is changed through Ansible become (as this user; the become method, e.g. sudo, pbrun or dzdo, comes
+# from the inventory: ansible_become_method), never through a raw sudo in a shell. Membership is checked first
+# (exactly, member by member), so nothing runs when the member is already in the group.
+oracle_common_group_membership_become_user: root
+# Per-OS commands (vars/Linux.yml, vars/AIX.yml), as argument vectors:
+#   add:     <command...> <member> <group>  (Linux: /bin/gpasswd --add, AIX: /usr/bin/chgrpmem -m +; the original commands)
+#   members: <command...> <group>           (Linux: /usr/bin/getent group, AIX: /usr/sbin/lsgroup -a users); the regex
+#            captures the comma-separated member list of its output.
+oracle_common_group_add_command: "{{ __oracle_common_group_add_command }}"
+oracle_common_group_members_command: "{{ __oracle_common_group_members_command }}"
+oracle_common_group_members_regex: "{{ __oracle_common_group_members_regex }}"

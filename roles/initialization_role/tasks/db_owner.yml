@@ -1,0 +1,38 @@
+---
+# Checks the owner of one database in scope (include variable __initialization_role_sid): the user running its
+# ora_pmon_<SID> process must be sid_server_dict[<SID>].dbowner. The process name is matched exactly (without case),
+# so ora_pmon_ORCL no longer matches ora_pmon_ORCL2 (the original grep did), and the full user name is read (Linux ps
+# otherwise shortens long names). DATABASE_NAME must be running, as before; another database in scope may be stopped
+# (the status check starts it, as it always did for DATABASE_NAME).
+- name: List the database processes ({{ __initialization_role_sid }})
+  ansible.builtin.command:
+    argv:
+      - ps
+      - -e
+      - -o
+      - "{{ 'user:64=' if (ansible_facts['system'] | default('')) == 'Linux' else 'user=' }}"
+      - -o
+      - args=
+  register: __initialization_role_ps
+  changed_when: false
+  check_mode: false
+
+- name: Validate the DB owner id ({{ __initialization_role_sid }})
+  ansible.builtin.assert:
+    that:
+      - (__initialization_role_owners | length > 0) or (__initialization_role_sid != DATABASE_NAME)
+      - __initialization_role_owners | reject('equalto', __initialization_role_expected) | list | length == 0
+    fail_msg: >-
+      Found DB Owner on {{ inventory_hostname }} is:
+      {{ __initialization_role_owners | join(', ') or 'none (ora_pmon_' ~ __initialization_role_sid ~ ' is not running)' }}
+      / Inventory lists DB Owner as: {{ __initialization_role_expected }} (database {{ __initialization_role_sid }})
+    success_msg: >-
+      Found DB Owner on {{ inventory_hostname }} is: {{ __initialization_role_owners | join(', ') or 'none (not running)' }}
+      / Inventory lists DB Owner as: {{ __initialization_role_expected }} (database {{ __initialization_role_sid }})
+  vars:
+    __initialization_role_expected: "{{ sid_server_dict[__initialization_role_sid].dbowner }}"
+    __initialization_role_re_ps_line: '\A\s*(\S+)\s+(.*?)\s*\Z'
+    __initialization_role_re_pmon: '(?i)\Aora_pmon_{{ __initialization_role_sid | regex_escape }}\Z'
+    __initialization_role_owners: >-
+      {{ __initialization_role_ps.stdout_lines | map('regex_findall', __initialization_role_re_ps_line) | select | map('first')
+         | selectattr('1', 'match', __initialization_role_re_pmon) | map('first') | unique | list }}

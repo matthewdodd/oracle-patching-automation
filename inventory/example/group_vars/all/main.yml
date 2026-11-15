@@ -1,0 +1,21 @@
+---
+# Example values only (example.com hosts, fake names). Copy inventory/example/ to inventory/<env>/
+# and replace them. sid_server_dict is the inventory dictionary of databases, keyed by the
+# ORACLE_SID passed as DATABASE_NAME (one database per run).
+#
+# Keys per database:
+#   dbowner      OS user that owns the database (owner of the ora_pmon_<SID> process)
+#   pdb          PDB name; "" for a non-CDB (the PDB listener steps are then skipped)
+#   dbvip        database VIP (pinged before startup and shutdown)
+#   dbListener   database listener name
+#   pdbListener  PDB listener name (key required even when pdb is "")
+#
+# The control (startup/shutdown) steps look the SID up in lower case first (as before), then as given, then
+# without case; differing upper- and lower-case entries for one SID are refused. Lower-case keys are simplest.
+sid_server_dict:
+  orcl01:
+    dbowner: oracle
+    pdb: orclpdb1
+    dbvip: dbhost01-vip.example.com
+    dbListener: LISTENER_ORCL01
+    pdbListener: LISTENER_ORCLPDB1

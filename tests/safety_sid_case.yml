@@ -1,0 +1,340 @@
+---
+# ORACLE_SID case regression test: the start and stop steps (standalone_control_role, which receives the lower-case SID
+# from oracle_control_sid.yml, as before) must use the same sid_server_dict entry and environment file as the scope
+# check, the shared ORACLE_HOME check and the patch steps (the SID as given), and a database the control steps cannot
+# find must be refused before any database is stopped. Runs on the controller only and changes nothing. Run from the
+# repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_sid_case.yml
+#
+# 1. oracle_common preflight scope checks: a mixed-case scope with one entry per SID is accepted; a lower-case duplicate
+#    entry that differs from the SID as given is refused (before anything is stopped).
+# 2. standalone_control_role vars/main.yml: the entry is found for the lower-case SID, else the SID as given, else the
+#    one key that matches without case; nothing (empty) when there is none or the match is ambiguous.
+# 3. oracle_control_sid.yml refuses the whole start or stop, before the first database, when a database in scope has
+#    no entry the control role can find.
+# 4. Structure: oracle_control_sid.yml passes the SID as given and the validated environment file (ORA_ENV_FILE); every
+#    control script call uses that environment and the resolved key; no lookup by the bare lower-case SID is left.
+# 5. The control environment (oracle_control_sid_environments): ORA_ENV_FILE in a patch run, plus
+#    ORA_ENV_FILE_ALLOW_ANY_OWNER=true only with oracle_common_env_file_allow_any_owner (alias, legacy strings), in a
+#    patch run and outside one (second play, without oracle_common loaded).
+- name: ORACLE_SID case regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/defaults/main/safety.yml
+    - ../roles/oracle_common/vars/main.yml
+    - ../roles/standalone_control_role/vars/main.yml
+  vars:
+    repo: "{{ playbook_dir }}/.."
+    DATABASE_NAME: orcl  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    entry_orcl: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_ORCL, pdbListener: ""}
+    entry_db2: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_DB2, pdbListener: ""}
+    entry_db2_other: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_OTHER, pdbListener: ""}
+    scope_cases:
+      - name: mixed-case scope, one entry per SID (the reviewer's case)
+        db: orcl
+        scope: "orcl,DB2"
+        dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}"}
+      - name: lower-case duplicate entry that differs
+        db: orcl
+        scope: "orcl,DB2"
+        dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}", db2: "{{ entry_db2_other }}"}
+        errors: ["look a database up by its lower-case ORACLE_SID", "for DB2 that finds a different entry"]
+      - name: lower-case duplicate entry that is identical
+        db: orcl
+        scope: "orcl,DB2"
+        dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}", db2: "{{ entry_db2 }}"}
+      - name: upper-case DATABASE_NAME with a different lower-case entry
+        db: ORCL
+        scope: ORCL
+        dict: {ORCL: "{{ entry_orcl }}", orcl: "{{ entry_db2_other }}"}
+        errors: ["for ORCL that finds a different entry"]
+      - name: lower-case scope entry missing as given
+        db: orcl
+        scope: "orcl,db2"
+        dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}"}
+        errors: ["sid_server_dict has no entry for db2"]
+    resolve_cases:
+      - {name: lower-case key, sid: db2, given: DB2, dict: {db2: 1, DB2: 2}, key: db2}
+      - {name: as given (the reviewer's case), sid: db2, given: DB2, dict: {orcl: 1, DB2: 2}, key: DB2}
+      - {name: as given among keys that differ only in case, sid: db2, given: DB2, dict: {DB2: 2, Db2: 3}, key: DB2}
+      - {name: outside a patch run, one key without case, sid: db2, given: "", dict: {Db2: 1}, key: Db2}
+      - {name: ambiguous without case, sid: db2, given: "", dict: {Db2: 1, DB2: 2}, key: ""}
+      - {name: missing, sid: db3, given: DB3, dict: {orcl: 1}, key: ""}
+      - {name: unchanged lower-case database, sid: orcl, given: orcl, dict: {orcl: 1}, key: orcl}
+    control_sid: "{{ lookup('ansible.builtin.file', repo ~ '/oracle_control_sid.yml') | from_yaml }}"
+    control_files:
+      - check_alert_log.yml
+      - check_listener_logs.yml
+      - rename_logs.yml
+      - start_database.yml
+      - start_listener.yml
+      - start_pdb_listener.yml
+      - stop_database.yml
+      - stop_listener.yml
+      - stop_pdb_listener.yml
+  tasks:
+    # --- 1. Scope checks --------------------------------------------------------------------------------------------
+    - name: Check each scope case
+      ansible.builtin.assert:
+        that:
+          - (__case_errors | length > 0) == (item.errors is defined)
+          - item.errors | default([]) | reject('in', __case_errors | join('\n')) | list | length == 0
+        fail_msg: "case '{{ item.name }}': errors {{ __case_errors }}"
+        quiet: true
+      vars:
+        DATABASE_NAME: "{{ item.db }}"  # noqa: var-naming[pattern] - original input name, kept for compatibility
+        sid_server_dict: "{{ item.dict }}"
+        oracle_common_patch_databases: "{{ item.scope }}"
+        __oracle_common_paths: "{{ __oracle_common_preflight_scope_paths }}"
+        __case_errors: "{{ __oracle_common_preflight_scope_checks | selectattr('failed') | map(attribute='msg') | list }}"
+      loop: "{{ scope_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refuse a differing lower-case entry through tasks/preflight_scope.yml
+      block:
+        - name: Run tasks/preflight_scope.yml (must fail)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_scope
+            oracle_patch_databases: "orcl,DB2"
+            sid_server_dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}", db2: "{{ entry_db2_other }}"}
+        - name: Fail the test (the differing entry was accepted)
+          ansible.builtin.fail:
+            msg: "preflight_scope.yml accepted a lower-case entry that differs from the SID as given"
+      rescue:
+        - name: Check the refusal
+          ansible.builtin.assert:
+            that: "'for DB2 that finds a different entry' in ansible_failed_result.msg | default('')"
+            fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+    # --- 2. Control role lookup -------------------------------------------------------------------------------------
+    - name: Check the control role finds the entry
+      ansible.builtin.assert:
+        that: __standalone_control_role_sid_key == item.key
+        fail_msg: "case '{{ item.name }}': got '{{ __standalone_control_role_sid_key }}', expected '{{ item.key }}'"
+        quiet: true
+      vars:
+        ORACLE_SID: "{{ item.sid }}"  # noqa: var-naming[pattern] - original input name of the role
+        standalone_control_role_sid: "{{ item.given }}"
+        sid_server_dict: "{{ item.dict }}"
+      loop: "{{ resolve_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # --- 3. oracle_control_sid.yml refuses before the first database ------------------------------------------------
+    - name: Refuse a stop when a database in scope has no entry
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (DB3 has no entry; must fail before the first database)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: shutdown
+            target: localhost
+            sid_server_dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}"}
+            oracle_common_run:
+              scope: [orcl, DB2, DB3]
+              databases:
+                orcl: {env_file: /local/orcl.env, work_dir: /tmp/x, dbowner: oracle}
+                DB2: {env_file: /local/DB2.env, work_dir: /tmp/x/DB2, dbowner: oracle}
+                DB3: {env_file: /local/DB3.env, work_dir: /tmp/x/DB3, dbowner: oracle}
+        - name: Fail the test (the stop went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB3 has no sid_server_dict entry"
+      rescue:
+        - name: Check the refusal came before the control role ran
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB3' in ansible_failed_result.msg | default('')"
+              - standalone_control_role_sid_key is not defined
+            fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+    # --- 3b. Environment passed to the control role (computed before the refusal above stops the run) --------------
+    - name: Check the control environment by default (ORA_ENV_FILE only, no ORA_ENV_FILE_ALLOW_ANY_OWNER)
+      ansible.builtin.assert:
+        that:
+          - oracle_control_sid_environments == expected
+          - oracle_control_sid_environments | dict2items | selectattr('value.ORA_ENV_FILE_ALLOW_ANY_OWNER', 'defined') | list == []
+        fail_msg: "unexpected: {{ oracle_control_sid_environments }}"
+      vars:
+        expected:
+          orcl: {ORA_ENV_FILE: /local/orcl.env}
+          DB2: {ORA_ENV_FILE: /local/DB2.env}
+          DB3: {ORA_ENV_FILE: /local/DB3.env}
+
+    - name: Run oracle_control_sid.yml with environment files of any owner accepted (patch run)
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (alias as the legacy string; DB3 has no entry, so it stops before the role)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: shutdown
+            target: localhost
+            oracle_patch_env_file_allow_any_owner: "true"
+            sid_server_dict: {orcl: "{{ entry_orcl }}", DB2: "{{ entry_db2 }}"}
+            oracle_common_run:
+              scope: [orcl, DB2, DB3]
+              databases:
+                orcl: {env_file: /local/orcl.env, work_dir: /tmp/x, dbowner: oracle}
+                DB2: {env_file: /local/DB2.env, work_dir: /tmp/x/DB2, dbowner: oracle}
+                DB3: {env_file: /local/DB3.env, work_dir: /tmp/x/DB3, dbowner: oracle}
+        - name: Fail the test (the stop went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB3 has no sid_server_dict entry"
+      rescue:
+        - name: Check every database gets ORA_ENV_FILE_ALLOW_ANY_OWNER=true next to its ORA_ENV_FILE
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB3' in ansible_failed_result.msg | default('')"
+              - oracle_control_sid_environments == expected
+            fail_msg: "unexpected: {{ oracle_control_sid_environments }}"
+          vars:
+            expected:
+              orcl: {ORA_ENV_FILE: /local/orcl.env, ORA_ENV_FILE_ALLOW_ANY_OWNER: "true"}
+              DB2: {ORA_ENV_FILE: /local/DB2.env, ORA_ENV_FILE_ALLOW_ANY_OWNER: "true"}
+              DB3: {ORA_ENV_FILE: /local/DB3.env, ORA_ENV_FILE_ALLOW_ANY_OWNER: "true"}
+
+    # --- 4. Structure -----------------------------------------------------------------------------------------------
+    - name: Check oracle_control_sid.yml passes the SID as given and the validated environment file
+      vars:
+        guard: "{{ control_sid | selectattr('name', 'equalto', 'Check every database in scope has a sid_server_dict entry') | list }}"
+        role_task: "{{ (control_sid | selectattr('block', 'defined') | first).block | first }}"
+      ansible.builtin.assert:
+        that:
+          - guard | length == 1
+          - (control_sid | map(attribute='name') | list).index('Check every database in scope has a sid_server_dict entry')
+            < (control_sid | map(attribute='name') | list).index('Startup/Shutdown database playbook given SID')
+          - role_task.vars.ORACLE_SID is search('oracle_control_sid_item \| lower')
+          - role_task.vars.standalone_control_role_sid is search('oracle_control_sid_item')
+          - role_task.vars.standalone_control_role_environment is search('oracle_control_sid_environments\[oracle_control_sid_item\]')
+          - (control_sid | first)['ansible.builtin.set_fact'].oracle_control_sid_env_files is search('env_file')
+          - (control_sid | first)['ansible.builtin.set_fact'].oracle_control_sid_environments is search('ORA_ENV_FILE')
+          - (control_sid | first)['ansible.builtin.set_fact'].oracle_control_sid_environments is search('ORA_ENV_FILE_ALLOW_ANY_OWNER')
+        fail_msg: "oracle_control_sid.yml no longer passes the SID as given, the environment file, or checks before stopping"
+
+    - name: Check every control script call uses the environment and the resolved key
+      vars:
+        text: "{{ lookup('ansible.builtin.file', repo ~ '/roles/standalone_control_role/tasks/' ~ item) }}"
+        file_tasks: "{{ text | from_yaml }}"
+        script_tasks: >-
+          {{ file_tasks | selectattr('register', 'defined') | rejectattr('register', 'equalto', 'standalone_control_role_db_stop_ps') | list }}
+      ansible.builtin.assert:
+        that:
+          - script_tasks | length > 0
+          - script_tasks | rejectattr('environment', 'defined') | list | length == 0
+          - script_tasks | map(attribute='environment') | reject('search', 'standalone_control_role_environment') | list | length == 0
+          - text is not search('sid_server_dict\[ORACLE_SID\]')
+        fail_msg: "{{ item }}: a control script call lost the environment, or looks the database up by the bare ORACLE_SID"
+      loop: "{{ control_files }}"
+
+    - name: Check the control role resolves the key before using it
+      vars:
+        main_text: "{{ lookup('ansible.builtin.file', repo ~ '/roles/standalone_control_role/tasks/main.yml') }}"
+      ansible.builtin.assert:
+        that:
+          - main_text is search('standalone_control_role_sid_key:\s+"\{\{ __standalone_control_role_sid_key \}\}"')
+          - main_text is not search('sid_server_dict\[ORACLE_SID\]')
+          - main_text.index('__standalone_control_role_sid_key') < main_text.index('sid_server_dict[standalone_control_role_sid_key]')
+        fail_msg: "standalone_control_role tasks/main.yml no longer resolves the sid_server_dict key first"
+
+# Outside a patch run and without oracle_common loaded (no oracle_common_run, no oracle_common defaults): the control
+# role gets ORA_ENV_FILE_ALLOW_ANY_OWNER=true only with the opt-in, otherwise an empty environment, as before. DB9 has
+# no sid_server_dict entry, so each run stops at the guard, after the environment was computed.
+- name: Control environment outside a patch run
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    DATABASE_NAME: DB9  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    sid_server_dict: {orcl: {dbowner: oracle, pdb: "", dbvip: "", dbListener: LISTENER_ORCL, pdbListener: ""}}
+  tasks:
+    - name: Outside a patch run, default (no opt-in)
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (default (no opt-in); must stop at the guard)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: startup
+        - name: Fail the test (the start went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB9 has no sid_server_dict entry"
+      rescue:
+        - name: Check the control environment (default (no opt-in))
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB9' in ansible_failed_result.msg | default('')"
+              - "oracle_control_sid_environments == {'DB9': {}}"
+            fail_msg: "unexpected: {{ oracle_control_sid_environments | default('undefined') }}"
+
+    - name: Outside a patch run, alias as the legacy string
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (alias as the legacy string; must stop at the guard)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: startup
+            oracle_patch_env_file_allow_any_owner: "true"
+        - name: Fail the test (the start went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB9 has no sid_server_dict entry"
+      rescue:
+        - name: Check the control environment (alias as the legacy string)
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB9' in ansible_failed_result.msg | default('')"
+              - "oracle_control_sid_environments == {'DB9': {'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'}}"
+            fail_msg: "unexpected: {{ oracle_control_sid_environments | default('undefined') }}"
+
+    - name: Outside a patch run, oracle_common_env_file_allow_any_owner as a boolean
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (oracle_common_env_file_allow_any_owner as a boolean; must stop at the guard)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: startup
+            oracle_common_env_file_allow_any_owner: true
+        - name: Fail the test (the start went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB9 has no sid_server_dict entry"
+      rescue:
+        - name: Check the control environment (oracle_common_env_file_allow_any_owner as a boolean)
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB9' in ansible_failed_result.msg | default('')"
+              - "oracle_control_sid_environments == {'DB9': {'ORA_ENV_FILE_ALLOW_ANY_OWNER': 'true'}}"
+            fail_msg: "unexpected: {{ oracle_control_sid_environments | default('undefined') }}"
+
+    - name: Outside a patch run, opt-in explicitly false
+      block:
+        - name: Reset the control environment (sentinel)
+          ansible.builtin.set_fact:
+            oracle_control_sid_environments: __not_run__
+        - name: Run oracle_control_sid.yml (opt-in explicitly false; must stop at the guard)
+          ansible.builtin.include_tasks: ../oracle_control_sid.yml
+          vars:
+            control: startup
+            oracle_common_env_file_allow_any_owner: "false"
+        - name: Fail the test (the start went ahead)
+          ansible.builtin.fail:
+            msg: "oracle_control_sid.yml went ahead although DB9 has no sid_server_dict entry"
+      rescue:
+        - name: Check the control environment (opt-in explicitly false)
+          ansible.builtin.assert:
+            that:
+              - "'sid_server_dict has no entry for DB9' in ansible_failed_result.msg | default('')"
+              - "oracle_control_sid_environments == {'DB9': {}}"
+            fail_msg: "unexpected: {{ oracle_control_sid_environments | default('undefined') }}"

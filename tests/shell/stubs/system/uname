@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Test stub of uname: -s prints STUB_UNAME_S (default Linux), -n prints STUB_UNAME_N (default dbhost01).
+case ${1:-} in
+  -n) printf '%s\n' "${STUB_UNAME_N:-dbhost01}" ;;
+  *) printf '%s\n' "${STUB_UNAME_S:-Linux}" ;;
+esac

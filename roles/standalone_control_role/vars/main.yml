@@ -1,28 +1,31 @@
 ---
-# vars file for standalone_control_role
+# Internal expressions of standalone_control_role (not inputs; checked directly by tests/safety_scope.yml).
 
-standalone_control_role_role_version: v1.0.0
-timeToPause: 120
+# The sid_server_dict key of this database: ORACLE_SID (lower-cased by oracle_control_sid.yml) as before, else the SID as
+# given in the scope (standalone_control_role_sid), else the one key that matches ORACLE_SID without case; empty when
+# there is none (or several). The patch playbooks refuse a scope where this finds another entry than the SID as given
+# (oracle_common tasks/preflight_scope.yml), so the start and stop steps use the entry the checks validated.
+__standalone_control_role_sid_key: >-
+  {%- set d = sid_server_dict if sid_server_dict is mapping else {} -%}
+  {%- set given = standalone_control_role_sid | default('') | string -%}
+  {%- set ns = namespace(keys=[]) -%}
+  {%- for k in d if (k | string | lower) == (ORACLE_SID | string | lower) -%}
+  {%-   set ns.keys = ns.keys + [k] -%}
+  {%- endfor -%}
+  {{ ORACLE_SID if ORACLE_SID in d
+     else (given if (given | length > 0 and given in d)
+           else ((ns.keys | first) if (ns.keys | length == 1) else '')) }}
 
-##Cannot use ~/ansiblescripts because ssh connects as ansible user for copying files.
-##After becoming a particular os user, the home directory ~ is different.
-remote_script_directory_base: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
-remote_output_directory_base: ~/ansiblescripts/startup/log
+# Static bash script that runs a control script and logs its output, replacing the original shell commands
+# `<script> <args> &> >(tee <log>.$(date +%Y.%m.%d))`. Called as: bash -c <this> <name> <log prefix> <script> <args...>;
+# every value is a positional parameter (never interpolated into the script, so no value can run a command). stdout and
+# stderr go to the task output and to <log prefix>.<YYYY.MM.DD>; the exit code is the script's own, as before.
+__standalone_control_role_logged_run: 'log=$1; shift; "$@" 2>&1 | tee "$log.$(date +%Y.%m.%d)"; exit "${PIPESTATUS[0]}"'
 
-remote_script_directory: "/tmp/ora_ansible_scripts_{{ DATABASE_NAME }}"
-remote_output_directory: "/tmp/ora_db_patch_{{ DATABASE_NAME }}"
+# The database VIP (sid_server_dict[<key>].dbvip); empty when it is not set, which skips the VIP ping check.
+__standalone_control_role_vip: "{{ sid_server_dict[standalone_control_role_sid_key].dbvip | default('', true) | string | trim }}"
 
-script_permission: 0777
-check_mount_script: check_mount.bash
-check_timestamp_script: check_timestamp.bash
-check_alertLog_script: check_alert_log.bash
-check_listenerLogs_script: check_listener_logs.bash
-rename_logs_script: rename_logs.bash
-start_database_script: database_ctl.bash
-start_listener_script: listener_ctl.bash
-start_pdb_script: pdb_ctl.bash
-start_pdbListener_script: pdb_listener_ctl.bash
-stop_pdb_script: pdb_ctl.bash
-stop_pdbListener_script: listener_ctl.bash
-stop_database_script: database_ctl.bash
-stop_listener_script: listener_ctl.bash
+# The database name under which the start and stop steps record their progress (oracle_common_progress.databases): the
+# SID as given in the patch scope when oracle_control_sid.yml passes it, else ORACLE_SID.
+__standalone_control_role_progress_sid: >-
+  {{ standalone_control_role_sid if (standalone_control_role_sid | default('') | string | length > 0) else ORACLE_SID }}

@@ -1,0 +1,9 @@
+---
+# Failure report (tasks/failure_record.yml, tasks/failure_report.yml): every rescue of the playbooks ends with a report
+# naming the failed stage and task, the error, and the state left behind (databases stopped by the run, whether the
+# Oracle home was patched, datapatch per database, files kept or removed).
+#
+# Longest error message kept from the failed task (characters).
+oracle_common_failure_msg_max_length: 2000
+# Last lines of the failed task's output (stdout, then stderr) added to the report; 0 leaves them out.
+oracle_common_failure_output_lines: 10

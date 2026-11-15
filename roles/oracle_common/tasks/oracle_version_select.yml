@@ -1,0 +1,104 @@
+---
+# Picks the supported-version entry (tasks/oracle_version.yml) for the database version detected on the host.
+# Inputs: oracle_common_detected_version, v$instance.version as reported by the database (e.g. 19.0.0.0.0;
+# 23.0.0.0.0 on both 23ai and 26ai), and the optional oracle_common_detected_version_full, v$instance.version_full
+# (18c and later, e.g. 19.21.0.0.0, 23.7.0.0.0, 23.26.0.0.0; empty on 12.1/12.2 or when not read). When
+# version_full is non-empty it is the version the entry is selected by (so 26ai, release update 23.26 and later,
+# is told apart from 23ai); otherwise version is. Replaces the original fixed mapping (19.0 -> 19.0.0, 12.2 -> 12.2.0.1,
+# anything else -> 12.1.0.2): an unknown version now stops the run with a clear message instead of silently
+# using the 12.1 artifacts. oracle_common_db_version (alias oracle_patch_db_version) selects an entry explicitly.
+# Outputs: oracle_common_oracle_version (the entry, plus its id) and oracle_common_detected_release, the first four
+# characters of oracle_common_detected_version (the original db_ver, e.g. 19.0, 12.1; always from
+# v$instance.version, never from version_full, so staging paths and the AIX 12.1 checks are unchanged).
+- name: Load the supported Oracle versions
+  ansible.builtin.include_tasks: oracle_version.yml
+  when: __oracle_common_oracle_versions is not defined
+
+- name: Check the detected database version
+  ansible.builtin.assert:
+    that:
+      - oracle_common_detected_version is defined
+      - oracle_common_detected_version | string is match(__oracle_common_re_db_version)
+    fail_msg: >-
+      Could not read the database version: expected a version such as 19.0.0.0.0, got
+      '{{ oracle_common_detected_version | default('<undefined>') }}'
+    quiet: true
+
+- name: Check the detected database version_full
+  ansible.builtin.assert:
+    that: >-
+      (oracle_common_detected_version_full | default('') | string | length == 0)
+      or (oracle_common_detected_version_full | string is match(__oracle_common_re_db_version))
+    fail_msg: >-
+      Could not read the database version_full: expected empty or a version such as 19.21.0.0.0, got
+      '{{ oracle_common_detected_version_full }}'
+    quiet: true
+
+# The version the entry is selected by: version_full when the database reported one, else version.
+- name: Set the version used for the selection
+  ansible.builtin.set_fact:
+    __oracle_common_selection_version: >-
+      {{ (oracle_common_detected_version_full | string)
+         if (oracle_common_detected_version_full | default('') | string | length > 0)
+         else (oracle_common_detected_version | string) }}
+    oracle_common_detected_release: "{{ (oracle_common_detected_version | string)[:4] }}"
+
+- name: Reset the matching Oracle versions
+  ansible.builtin.set_fact:
+    __oracle_common_version_matches: []
+
+- name: Find the Oracle versions matching the detected version
+  ansible.builtin.set_fact:
+    __oracle_common_version_matches: "{{ __oracle_common_version_matches + [item.key] }}"
+  loop: "{{ __oracle_common_oracle_versions | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: __oracle_common_selection_version is match(item.value.match_regex)
+
+- name: Check the Oracle version can be determined
+  ansible.builtin.assert:
+    that: >-
+      (oracle_common_db_version | string | length > 0) or (__oracle_common_version_matches | length == 1)
+    fail_msg: >-
+      Database version {{ __oracle_common_selection_version }}
+      {{ ('matches several supported versions (' ~ (__oracle_common_version_matches | join(', ')) ~ ')')
+         if (__oracle_common_version_matches | length > 1) else 'is not supported' }}.
+      Supported versions: {{ __oracle_common_oracle_versions.keys() | list | join(', ') }} (one file each in
+      roles/oracle_common/vars/oracle_versions/). Set oracle_common_db_version (alias oracle_patch_db_version)
+      to the version to use, or add a version file.
+    quiet: true
+
+- name: Check the selected Oracle version accepts the detected version
+  ansible.builtin.assert:
+    that:
+      - (oracle_common_db_version | string) in __oracle_common_oracle_versions
+      - __oracle_common_selection_version is match(__oracle_common_oracle_versions[oracle_common_db_version | string].accept_regex)
+    fail_msg: >-
+      oracle_common_db_version (alias oracle_patch_db_version) is '{{ oracle_common_db_version }}', but the database
+      reports version {{ __oracle_common_selection_version }}, which that entry does not accept
+      ({{ __oracle_common_oracle_versions[oracle_common_db_version | string].accept_regex | default('unknown version') }}).
+    quiet: true
+  when: oracle_common_db_version | string | length > 0
+
+- name: Select the Oracle version
+  ansible.builtin.set_fact:
+    oracle_common_oracle_version: >-
+      {{ __oracle_common_oracle_versions[__oracle_common_version_id] | combine({'id': __oracle_common_version_id}) }}
+  vars:
+    __oracle_common_version_id: >-
+      {{ (oracle_common_db_version | string) if (oracle_common_db_version | string | length > 0)
+         else __oracle_common_version_matches | first }}
+
+- name: Show the selected Oracle version
+  ansible.builtin.debug:
+    msg: >-
+      Database version {{ oracle_common_detected_version }}{{ (' (version_full ' ~ oracle_common_detected_version_full ~ ')')
+      if (oracle_common_detected_version_full | default('') | string | length > 0) else '' }}: {{ oracle_common_oracle_version.label }}
+      (version entry {{ oracle_common_oracle_version.id }}{{ ', selected explicitly' if (oracle_common_db_version | string | length > 0) else '' }}).
+
+- name: Warn about a release out of Oracle support
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ oracle_common_oracle_version.label }} is out of Oracle Premier and Extended Support; plan a move
+      to a supported release.
+  when: oracle_common_oracle_version.desupported | bool

@@ -1,0 +1,26 @@
+---
+# Oracle Database 12c Release 2 (12.2.0.1). One entry of the supported-version registry built by tasks/oracle_version.yml, keyed by this file's
+# name (12.2). Adding an Oracle version means adding one such file. Any value can be overridden per environment
+# without editing this file: oracle_common_oracle_version_overrides: {"12.2": {<key>: <value>}}.
+# All values sit under one key so the file is also safe to load with include_vars.
+__oracle_common_version_definition:
+  label: Oracle Database 12c Release 2 (12.2.0.1)
+  # Detected version (v$instance.version, e.g. 12.2.0.1.0) that selects this entry automatically.
+  match_regex: '\A12\.2(?:\.[0-9]+)*\Z'
+  # Detected versions accepted when this entry is selected explicitly (oracle_common_db_version).
+  accept_regex: '\A12\.2(?:\.[0-9]+)*\Z'
+  # Folder of this release in the patch repository (the original artf_ver).
+  artifact_dir: "12.2.0.1"
+  # Version component of the patch staging directory (the original db_ver, the first 4 characters of the version).
+  staging_component: "12.2"
+  # README.html patterns (grep basic regular expressions) that identify the Release Update folder and the OJVM
+  # folder of the patch bundle, and how many README lines must match the OJVM pattern (the original: more than 1).
+  readme_ru_pattern: 'Database * Release Update'
+  readme_jvm_pattern: '\- Oracle JavaVM Component'
+  readme_jvm_min_matches: 2
+  # AIX only: rewrite $ORACLE_HOME/QOpatch/qopiprep.bat to use ksh93 (12.1 only).
+  qopiprep_fix: false
+  # How datapatch runs: upgrade (the original, for every version) or normal.
+  datapatch_startup_mode: upgrade
+  # Out of Oracle Premier and Extended Support: a warning is shown, the patch still runs.
+  desupported: true

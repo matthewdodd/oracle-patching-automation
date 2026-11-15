@@ -1,0 +1,434 @@
+---
+# Explicitly given working directories regression test (rule a): remote_script_directory, remote_output_directory and
+# patch_folder_name (or oracle_common_patch_staging_dir) given explicitly are used exactly as given and handled like the
+# original fixed names, so a second run with the same values works again. Generated per-run directories are still
+# refused when they already exist. Runs on the controller only, in a temporary directory it removes afterwards; it
+# changes nothing in the repository. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/safety_work_dirs.yml
+#
+# 1. oracle_common tasks/preflight_work_dirs.yml: oracle_common_run.script_dir_fixed / output_fixed / staging_fixed are
+#    false for generated per-run directories, true for explicitly given ones and with oracle_common_unique_work_dirs
+#    false.
+# 2. End to end, two runs with the same explicit remote_script_directory and remote_output_directory (the second run
+#    finds the directories the first one left): initialization_role tasks/init_clean.yml removes and run_dir.yml
+#    re-creates them, as before; when the removal failed, run_dir.yml re-uses them (not recorded for removal).
+# 3. A generated per-run directory that already exists is neither removed by init_clean.yml nor accepted by run_dir.yml.
+# 4. Structure: initialization_role passes the fixed flags to run_dir.yml and init_clean.yml; the staging directory
+#    refusal of copy_files_to_server.yml applies only to a generated staging directory.
+# 5. The parent directory (run_dir.yml): a missing parent (first run on a fresh host, e.g. the default
+#    oracle_common_staging_base) is created with oracle_common_dir_mode and the run goes on; a world-writable parent
+#    without the sticky bit is refused; a world-writable parent with it (like /tmp) is accepted with the warning.
+- name: Explicitly given working directories regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/environment_file.yml
+    - ../roles/oracle_common/defaults/main/staging.yml
+    - ../roles/oracle_common/defaults/main/safety.yml
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    ansible_become: false
+    DATABASE_NAME: ORCL01  # noqa: var-naming[pattern] - original input name, kept for compatibility
+    init_main: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/main.yml') | from_yaml }}"
+    init_clean: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/init_clean.yml') | from_yaml }}"
+    copy_files: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/oracle_database_patch_role/tasks/copy_files_to_server.yml') | from_yaml }}"
+  tasks:
+    # --- 1. Fixed flags ---------------------------------------------------------------------------------------------
+    - name: Read the current user
+      ansible.builtin.command:
+        argv: [id, -un]
+      register: dirs_user
+      changed_when: false
+
+    - name: Set the database inventory
+      ansible.builtin.set_fact:
+        sid_server_dict:
+          ORCL01: {dbowner: "{{ dirs_user.stdout }}", pdb: "", dbvip: "", dbListener: LISTENER_ORCL01, pdbListener: ""}
+          ORCL02: {dbowner: "{{ dirs_user.stdout }}", pdb: "", dbvip: "", dbListener: LISTENER_ORCL02, pdbListener: ""}
+        __oracle_common_run_id_value: r1
+
+    - name: Run tasks/preflight_work_dirs.yml (generated per-run directories)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+
+    - name: Check generated per-run directories are not fixed
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.unique == true
+          - oracle_common_run.script_dir_fixed == false
+          - oracle_common_run.output_fixed == false
+          - oracle_common_run.staging_fixed == false
+          - oracle_common_run.script_dir is search('_r1$')
+        fail_msg: "unexpected: {{ oracle_common_run }}"
+
+    - name: Run tasks/preflight_work_dirs.yml (fixed directory names)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        oracle_patch_unique_work_dirs: false
+
+    - name: Check every directory is fixed with the original names
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.unique == false
+          - oracle_common_run.script_dir_fixed == true
+          - oracle_common_run.output_fixed == true
+          - oracle_common_run.staging_fixed == true
+        fail_msg: "unexpected: {{ oracle_common_run }}"
+
+    - name: Run tasks/preflight_work_dirs.yml (explicit staging directory, original name patch_folder_name)
+      ansible.builtin.include_tasks: tasks/oracle_common.yml
+      vars:
+        test_tasks_from: preflight_work_dirs
+        patch_folder_name: /u01/stage/mine
+
+    - name: Check only the explicit staging directory is fixed
+      ansible.builtin.assert:
+        that:
+          - oracle_common_run.unique == true
+          - oracle_common_run.script_dir_fixed == false
+          - oracle_common_run.output_fixed == false
+          - oracle_common_run.staging_fixed == true
+        fail_msg: "unexpected: {{ oracle_common_run }}"
+
+    # --- 2. and 3. End to end ---------------------------------------------------------------------------------------
+    - name: Run two runs with the same explicit directories
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: safety_work_dirs.
+          register: wd_tmp
+
+        - name: Set the explicit directories
+          ansible.builtin.set_fact:
+            explicit_scripts: "{{ wd_tmp.path }}/my_scripts"
+            explicit_output: "{{ wd_tmp.path }}/my_output"
+            oracle_common_modes: {script: "0700", dir: "0700", file: "0600"}
+
+        # Run 1 and run 2 (the second finds what the first left): the same steps as initialization_role (tasks/main.yml).
+        - name: Choose the directories of run r1
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_work_dirs
+            __oracle_common_run_id_value: "r1"
+            oracle_patch_databases: ORCL01 ORCL02
+            remote_script_directory: "{{ explicit_scripts }}"
+            remote_output_directory: "{{ explicit_output }}"
+
+        - name: Check the explicit directories are used exactly and fixed (run r1)
+          ansible.builtin.assert:
+            that:
+              - oracle_common_run.id == 'r1'
+              - oracle_common_run.unique == true
+              - oracle_common_run.script_dir == explicit_scripts
+              - oracle_common_run.output_root == explicit_output
+              - oracle_common_run.script_dir_fixed == true
+              - oracle_common_run.output_fixed == true
+            fail_msg: "unexpected: {{ oracle_common_run }}"
+
+        - name: Remove the directories of an earlier run (run r1)
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
+            tasks_from: init_clean
+          vars:
+            remote_script_directory: "{{ oracle_common_run.script_dir }}"
+            remote_output_directory: "{{ oracle_common_run.output_root }}"
+
+        - name: Reset the record of created paths (run r1)
+          ansible.builtin.set_fact:
+            initialization_role_created_paths: []
+
+        - name: Create the directories (run r1)
+          ansible.builtin.include_role:
+            name: initialization_role
+            tasks_from: run_dir
+          vars:
+            __initialization_role_dir: "{{ item.path }}"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: "{{ item.remove }}"
+            __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed if item.remove else oracle_common_run.output_fixed }}"
+          loop:
+            - {path: "{{ oracle_common_run.script_dir }}", remove: true}
+            - {path: "{{ oracle_common_run.databases.ORCL01.work_dir }}", remove: false}
+            - {path: "{{ oracle_common_run.databases.ORCL02.work_dir }}", remove: false}
+
+        - name: Check the directories were created fresh and recorded (run r1)
+          ansible.builtin.assert:
+            that:
+              - initialization_role_created_paths | map(attribute='path') | list
+                == [explicit_scripts, explicit_output, explicit_output ~ '/ORCL02']
+              - initialization_role_created_paths | map(attribute='remove') | list == [true, false, false]
+            fail_msg: "unexpected record (run r1): {{ initialization_role_created_paths }}"
+
+        - name: Choose the directories of run r2
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_work_dirs
+            __oracle_common_run_id_value: "r2"
+            oracle_patch_databases: ORCL01 ORCL02
+            remote_script_directory: "{{ explicit_scripts }}"
+            remote_output_directory: "{{ explicit_output }}"
+
+        - name: Check the explicit directories are used exactly and fixed (run r2)
+          ansible.builtin.assert:
+            that:
+              - oracle_common_run.id == 'r2'
+              - oracle_common_run.unique == true
+              - oracle_common_run.script_dir == explicit_scripts
+              - oracle_common_run.output_root == explicit_output
+              - oracle_common_run.script_dir_fixed == true
+              - oracle_common_run.output_fixed == true
+            fail_msg: "unexpected: {{ oracle_common_run }}"
+
+        - name: Remove the directories of an earlier run (run r2)
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
+            tasks_from: init_clean
+          vars:
+            remote_script_directory: "{{ oracle_common_run.script_dir }}"
+            remote_output_directory: "{{ oracle_common_run.output_root }}"
+
+        - name: Reset the record of created paths (run r2)
+          ansible.builtin.set_fact:
+            initialization_role_created_paths: []
+
+        - name: Create the directories (run r2)
+          ansible.builtin.include_role:
+            name: initialization_role
+            tasks_from: run_dir
+          vars:
+            __initialization_role_dir: "{{ item.path }}"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: "{{ item.remove }}"
+            __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed if item.remove else oracle_common_run.output_fixed }}"
+          loop:
+            - {path: "{{ oracle_common_run.script_dir }}", remove: true}
+            - {path: "{{ oracle_common_run.databases.ORCL01.work_dir }}", remove: false}
+            - {path: "{{ oracle_common_run.databases.ORCL02.work_dir }}", remove: false}
+
+        - name: Check the directories were created fresh and recorded (run r2)
+          ansible.builtin.assert:
+            that:
+              - initialization_role_created_paths | map(attribute='path') | list
+                == [explicit_scripts, explicit_output, explicit_output ~ '/ORCL02']
+              - initialization_role_created_paths | map(attribute='remove') | list == [true, false, false]
+            fail_msg: "unexpected record (run r2): {{ initialization_role_created_paths }}"
+
+        - name: Leave a file of run 2 in the explicit output directory
+          ansible.builtin.copy:
+            dest: "{{ explicit_output }}/run2.log"
+            content: "run 2\n"
+            mode: "0600"
+
+        - name: Re-use the explicit directories when they could not be removed (run 3, no init_clean.yml)
+          ansible.builtin.include_role:
+            name: initialization_role
+            tasks_from: run_dir
+          vars:
+            initialization_role_created_paths: []
+            __initialization_role_dir: "{{ item.path }}"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: "{{ item.remove }}"
+            __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed if item.remove else oracle_common_run.output_fixed }}"
+          loop:
+            - {path: "{{ explicit_scripts }}", remove: true}
+            - {path: "{{ explicit_output }}", remove: false}
+            - {path: "{{ explicit_output }}/ORCL02", remove: false}
+
+        - name: Check the re-used directories kept their content and were not recorded
+          ansible.builtin.stat:
+            path: "{{ explicit_output }}/run2.log"
+          register: wd_run2_log
+
+        - name: Assert the re-use
+          ansible.builtin.assert:
+            that:
+              - wd_run2_log.stat.exists
+              - oracle_common_run.script_dir == explicit_scripts
+              - oracle_common_run.output_root == explicit_output
+            fail_msg: "the explicit directories were not re-used: {{ oracle_common_run }}"
+
+        # --- 3. A generated per-run directory that already exists ---------------------------------------------------
+        - name: Choose generated per-run directories (run r3)
+          ansible.builtin.include_tasks: tasks/oracle_common.yml
+          vars:
+            test_tasks_from: preflight_work_dirs
+            __oracle_common_run_id_value: r3
+            oracle_common_remote_script_directory: "{{ wd_tmp.path }}/gen_scripts"
+            oracle_common_remote_output_directory: "{{ wd_tmp.path }}/gen_output"
+
+        - name: Plant the generated script directory of run r3 (another run, or someone else)
+          ansible.builtin.file:
+            path: "{{ oracle_common_run.script_dir }}"
+            state: directory
+            mode: "0700"
+
+        - name: Run init_clean.yml with generated per-run directories
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
+            tasks_from: init_clean
+          vars:
+            remote_script_directory: "{{ oracle_common_run.script_dir }}"
+            remote_output_directory: "{{ oracle_common_run.output_root }}"
+
+        - name: Check init_clean.yml left the planted per-run directory alone
+          ansible.builtin.stat:
+            path: "{{ oracle_common_run.script_dir }}"
+          register: wd_planted
+
+        - name: Refuse the planted per-run directory
+          block:
+            - name: Use the planted per-run directory (must fail)
+              ansible.builtin.include_role:
+                name: initialization_role
+                tasks_from: run_dir
+              vars:
+                initialization_role_created_paths: []
+                __initialization_role_dir: "{{ oracle_common_run.script_dir }}"
+                __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+                __initialization_role_dir_remove: true
+                __initialization_role_dir_fixed: "{{ oracle_common_run.script_dir_fixed }}"
+            - name: Fail the test (the planted per-run directory was accepted)
+              ansible.builtin.fail:
+                msg: "run_dir.yml accepted a generated per-run directory that already existed"
+          rescue:
+            - name: Check the refusal
+              ansible.builtin.assert:
+                that:
+                  - wd_planted.stat.isdir | default(false)
+                  - "'gen_scripts_r3 already exists' in ansible_failed_result.msg | default('')"
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        # --- 5. The parent directory --------------------------------------------------------------------------------
+        - name: Create a directory whose parent does not exist yet (first run on a fresh host)
+          # noqa reason - not variables of this role: shared working directories and oracle_common_modes (test inputs).
+          ansible.builtin.include_role:  # noqa: var-naming[no-role-prefix]
+            name: initialization_role
+            tasks_from: run_dir
+          vars:
+            initialization_role_created_paths: []
+            oracle_common_modes: {script: "0750", dir: "0750", file: "0640"}
+            __initialization_role_dir: "{{ wd_tmp.path }}/fresh_base/scripts_r5"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+            __initialization_role_dir_fixed: false
+
+        - name: Read the created directory and its new parent
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+            get_checksum: false
+          register: wd_fresh
+          loop:
+            - "{{ wd_tmp.path }}/fresh_base"
+            - "{{ wd_tmp.path }}/fresh_base/scripts_r5"
+
+        - name: Check the missing parent was created with oracle_common_dir_mode and the run went on
+          ansible.builtin.assert:
+            that:
+              - wd_fresh.results | map(attribute='stat.isdir') | list == [true, true]
+              - wd_fresh.results | map(attribute='stat.mode') | list == ['0750', '0750']
+              - not __initialization_role_parent_world_writable
+            fail_msg: "unexpected: {{ wd_fresh.results | map(attribute='stat') | list }}"
+
+        - name: Create a world-writable parent without the sticky bit and one with it
+          ansible.builtin.file:
+            path: "{{ wd_tmp.path }}/{{ item.name }}"
+            state: directory
+            mode: "{{ item.mode }}"
+          loop:
+            - {name: open_base, mode: "0777"}
+            - {name: sticky_base, mode: "1777"}
+
+        - name: Refuse a world-writable parent without the sticky bit
+          block:
+            - name: Use a directory under the world-writable parent (must fail)
+              ansible.builtin.include_role:
+                name: initialization_role
+                tasks_from: run_dir
+              vars:
+                initialization_role_created_paths: []
+                __initialization_role_dir: "{{ wd_tmp.path }}/open_base/scripts_r5"
+                __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+                __initialization_role_dir_remove: true
+                __initialization_role_dir_fixed: false
+            - name: Fail the test (the world-writable parent was accepted)
+              ansible.builtin.fail:
+                msg: "run_dir.yml accepted a world-writable parent directory without the sticky bit"
+          rescue:
+            - name: Check the refusal names the parent and its mode and nothing was created
+              ansible.builtin.stat:
+                path: "{{ wd_tmp.path }}/open_base/scripts_r5"
+              register: wd_open_child
+
+            - name: Assert the refusal
+              ansible.builtin.assert:
+                that:
+                  - "'world-writable without the sticky bit (mode 0777)' in ansible_failed_result.msg | default('')"
+                  - not wd_open_child.stat.exists
+                fail_msg: "unexpected: {{ ansible_failed_result.msg | default('') }}"
+
+        - name: Accept a world-writable parent with the sticky bit (like /tmp), with the warning
+          ansible.builtin.include_role:
+            name: initialization_role
+            tasks_from: run_dir
+          vars:
+            initialization_role_created_paths: []
+            __initialization_role_dir: "{{ wd_tmp.path }}/sticky_base/scripts_r5"
+            __initialization_role_dir_owner: "{{ dirs_user.stdout }}"
+            __initialization_role_dir_remove: true
+            __initialization_role_dir_fixed: false
+
+        - name: Read the directory under the sticky parent
+          ansible.builtin.stat:
+            path: "{{ wd_tmp.path }}/sticky_base/scripts_r5"
+            follow: false
+          register: wd_sticky_child
+
+        - name: Check the directory was created and the warning condition held
+          ansible.builtin.assert:
+            that:
+              - wd_sticky_child.stat.isdir | default(false)
+              - __initialization_role_parent_world_writable | bool
+              - __initialization_role_parent_sticky | bool
+            fail_msg: "unexpected: {{ wd_sticky_child.stat }}"
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ wd_tmp.path }}"
+            state: absent
+          when: wd_tmp.path is defined
+
+    # --- 4. Structure -----------------------------------------------------------------------------------------------
+    - name: Check initialization_role passes the fixed flags
+      vars:
+        init_block: "{{ (init_main | selectattr('name', 'equalto', 'Run init') | first).block }}"
+        script_dir_task: "{{ init_block | selectattr('name', 'equalto', 'Create the script directory of this run') | first }}"
+        work_dir_task: "{{ init_block | selectattr('name', 'equalto', 'Create the working directory of each database in scope') | first }}"
+        clean_task: "{{ init_main | selectattr('name', 'search', 'Remove the working directories of an earlier run') | first }}"
+      ansible.builtin.assert:
+        that:
+          - script_dir_task.vars.__initialization_role_dir_fixed is search('oracle_common_run\.script_dir_fixed \|')
+          - work_dir_task.vars.__initialization_role_dir_fixed is search('oracle_common_run\.output_fixed \|')
+          - clean_task.when is search('script_dir_fixed') and clean_task.when is search('output_fixed')
+          - init_clean[0].when is search('script_dir_fixed')
+          - init_clean[1].when is search('output_fixed')
+        fail_msg: "initialization_role no longer handles explicitly given directories like the fixed names"
+
+    - name: Check the staging directory refusal applies only to a generated staging directory
+      vars:
+        copy_block: "{{ (copy_files | first) }}"
+        removal: "{{ copy_block.block | selectattr('name', 'search', 'Remove the prior staging directory') | first }}"
+        refusal: "{{ copy_block.block | selectattr('name', 'search', 'Refuse a per-run staging directory') | first }}"
+      ansible.builtin.assert:
+        that:
+          - copy_block.vars.__oracle_database_patch_role_unique is search('oracle_common_run\.staging_fixed \| default\(')
+          - removal.when is search('not __oracle_database_patch_role_unique')
+          - refusal['ansible.builtin.assert'].that is search('__oracle_database_patch_role_unique')
+        fail_msg: "copy_files_to_server.yml refuses (or keeps) an explicitly given staging directory"

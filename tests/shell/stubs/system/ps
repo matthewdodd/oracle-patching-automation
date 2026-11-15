@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Test stub of ps. "ps -e -o pid,args": a header, ora_pmon_/ora_smon_<sid> (pids 4242/4243) unless the
+# instance in STUB_STATE is DOWN, then the lines of STUB_STATE/ps_extra. "ps eww <pid>": STUB_STATE/psenv_<pid>.
+# STUB_STATE/ps_fail makes every call fail.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+[[ -f $S/ps_fail ]] && exit 1
+if [[ ${1:-} == eww ]]; then
+  [[ -f $S/psenv_${2:-none} ]] || exit 1
+  printf '  PID TTY STAT TIME COMMAND\n'
+  cat -- "$S/psenv_$2"
+  exit 0
+fi
+state=DOWN
+[[ -f $S/instance ]] && state=$(cat -- "$S/instance")
+sid=ORCL
+[[ -f $S/sid ]] && sid=$(cat -- "$S/sid")
+printf '  PID COMMAND\n'
+if [[ $state != DOWN ]]; then
+  printf ' 4242 ora_pmon_%s\n' "$sid"
+  printf ' 4243 ora_smon_%s\n' "$sid"
+fi
+[[ -f $S/ps_extra ]] && cat -- "$S/ps_extra"
+exit 0

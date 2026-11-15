@@ -1,0 +1,33 @@
+---
+# Role metadata. Inputs are documented and validated in meta/argument_specs.yml.
+galaxy_info:
+  role_name: oracle_common
+  author: Oracle patching automation maintainers
+  description: >-
+    Shared configuration for the Oracle Database patching roles: refuses unsupported platforms, loads layered
+    per-OS variables (vars/<system|os_family|distribution|major>.yml) and the supported Oracle versions
+    (vars/oracle_versions/<version>.yml), validates every input before a host is changed, checks the
+    prerequisite packages and resolves the patch bundle.
+  license: GPL-3.0-or-later
+  # Same floor as the pinned controller toolchain in requirements.txt (ansible-core 2.22.0).
+  min_ansible_version: "2.22"
+  # Platforms with a vars file in vars/. EL covers RHEL and its rebuilds (Oracle Linux, Rocky, AlmaLinux:
+  # os_family RedHat), which share RedHat-<major>.yml; RedHat-10.yml covers release 10 too. EL7 and Amazon
+  # Linux 2 are refused by tasks/guard.yml. AIX 7.3 uses the same AIX.yml as 7.2.
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: AIX
+      versions:
+        - "7.2"
+  galaxy_tags:
+    - oracle
+    - database
+    - patching
+    - aix
+    - rhel
+
+# No role dependencies: the playbooks import oracle_common explicitly, before the other roles.
+dependencies: []

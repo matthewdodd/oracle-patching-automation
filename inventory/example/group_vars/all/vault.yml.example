@@ -1,0 +1,33 @@
+---
+# EXAMPLE ONLY - not encrypted and not loaded by Ansible (the .example extension is ignored). Every value is the
+# "<CHANGE_ME>" placeholder, which the playbooks reject (input validation refuses the run while any oracle_common_*
+# value fed from it still holds the placeholder), so an unedited copy cannot run. To use it for an environment
+# (one vault id per environment):
+#
+#   cp inventory/example/group_vars/all/vault.yml.example inventory/<env>/group_vars/all/vault.yml
+#   # replace every value, then encrypt it with the environment's vault id:
+#   ansible-vault encrypt --vault-id <env>@prompt inventory/<env>/group_vars/all/vault.yml
+#   ansible-playbook -i inventory/<env>/hosts.yml --vault-id <env>@prompt oracle_database_patch.yml -e target=...
+#
+# Never commit an unencrypted vault.yml or a vault password file (.gitignore excludes .vault_pass* and
+# vault_pass*). Rotate with: ansible-vault rekey --vault-id <env>@prompt --new-vault-id <env>@prompt <file>
+# In AAP, attach a Vault credential with the same vault id to the job template instead of a password prompt.
+#
+# roles/oracle_common reads these names directly (defaults/main/notify.yml, servicenow.yml and patch.yml);
+# no mapping in main.yml is needed.
+
+# Teams Workflows webhook URL (https; the URL is a bearer secret) -> oracle_common_notify_webhook_url.
+# Delete the entry to run without notifications (they are then skipped with a message).
+# Left as "<CHANGE_ME>", the whole run is refused by input validation (it is not just skipped).
+vault_teams_webhook_url: "<CHANGE_ME>"
+
+# ServiceNow change check -> oracle_common_snow_instance / _username / _password (the original names snow_instance,
+# snow_user and snow_password are still accepted). Instance: https URL or bare instance name.
+vault_snow_instance: "<CHANGE_ME>"
+vault_snow_user: "<CHANGE_ME>"
+vault_snow_password: "<CHANGE_ME>"
+
+# Patch repository credentials (HTTP basic authentication) -> oracle_common_patch_repo_username / _password.
+# Set both or delete both (no credentials are sent then).
+vault_patch_repo_username: "<CHANGE_ME>"
+vault_patch_repo_password: "<CHANGE_ME>"

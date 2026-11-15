@@ -1,0 +1,45 @@
+---
+# Re-runs the playbook unchanged after a successful run (the patch is already applied in every database in scope): the
+# run must end successfully as "unneeded" before anything is stopped, and leave the instance and listener processes
+# (same pids), the patches of every home, the OPatch directories and every database's SQL patch registry and
+# startup/shutdown history exactly as they were. Leaves molecule_states.before for later comparisons.
+- name: Record the host state before the re-run
+  ansible.builtin.include_tasks: host_state.yml
+  vars:
+    molecule_state_name: before
+
+- name: Run the playbook again (the patch is already applied)
+  ansible.builtin.include_tasks: rerun.yml
+  vars:
+    molecule_rerun_name: already applied
+
+- name: Check the re-run ended as "unneeded" without stopping anything
+  ansible.builtin.assert:
+    that:
+      - molecule_rerun.rc | int == 0
+      - molecule_rerun.recap | length == 4
+      - molecule_rerun.recap[2] == '0'
+      - molecule_rerun.recap[3] == '0'
+      - >-
+        ('Patch status: applied (already applied: ' ~ __molecule_scope_text ~ ';') in molecule_rerun.output
+      # No webhook in the test: the notification is skipped with a message and never fails the run.
+      - "\"Teams notification 'unneeded' not sent: no Teams webhook URL is configured\" in molecule_rerun.output"
+    fail_msg: >-
+      Expected rc 0, "failed=0" and the "already applied" outcome for {{ __molecule_scope_text }}; got rc
+      {{ molecule_rerun.rc }}, recap (ok, changed, unreachable, failed) {{ molecule_rerun.recap }}.
+  vars:
+    # The databases in scope in run order (DATABASE_NAME first), as preflight_patch_status.yml lists them.
+    __molecule_scope_text: "{{ molecule_scope | default([DATABASE_NAME]) | join(', ') }}"
+
+- name: Record the host state after the re-run
+  ansible.builtin.include_tasks: host_state.yml
+  vars:
+    molecule_state_name: after_rerun
+
+- name: Check the re-run stopped and changed nothing
+  ansible.builtin.assert:
+    that: molecule_states.before == molecule_states.after_rerun
+    fail_msg: >-
+      The re-run changed the databases, listeners or Oracle homes: before {{ molecule_states.before }};
+      after {{ molecule_states.after_rerun }}
+    success_msg: "Unchanged: {{ molecule_states.after_rerun.processes | length }} processes, the patches and OPatch"

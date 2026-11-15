@@ -1,35 +1,48 @@
 ---
-##This script copies the check_listener_logs.bash script to server and checks the listener logs for errors and warnings.
-##
+## Checks the listener logs for errors with check_listener_logs.bash (copied by copy_scripts.yml). Logged as before
+## (<remote_output_directory>/log.<check_listenerLogs_script>.<YYYY.MM.DD>); no shell interpolation.
+## Exit code 4 (a log has errors or is missing) is a WARNING by default, as before (the original printed it as an
+## ignored failure); standalone_control_role_fail_on_listener_log_errors: true makes it fail the startup. Any other
+## non-zero exit code fails, as before.
 
-- name: copy check_listener_logs script to {{ server_name }}
-  copy:
-    src: "{{ check_listenerLogs_script }}"
-    dest: "{{ remote_script_directory }}/{{ check_listenerLogs_script }}"
-    mode: "{{script_permission}}"
-    force: yes
-  delegate_to: "{{ server_name }}"
-
-
+# The listener names (dbListener, pdbListener) follow ORACLE_SID as before; an empty one is left out, as the original
+# shell's word splitting did.
 - name: Checking listener logs for errors for {{ ORACLE_SID }}
-  vars:
-    listenerA: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
-    listenerB: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"
-  shell: > 
-    {{remote_script_directory}}/{{check_listenerLogs_script}}
-    {{ORACLE_SID}} {{listenerA}} {{listenerB}}
-    &> >(tee {{ remote_output_directory }}/log.{{ check_listenerLogs_script }}.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
+  ansible.builtin.command:
+    argv: >-
+      {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'check_listener_logs',
+          remote_output_directory ~ '/log.' ~ standalone_control_role_check_listener_logs_script,
+          remote_script_directory ~ '/' ~ standalone_control_role_check_listener_logs_script, ORACLE_SID]
+         + (sid_server_dict[standalone_control_role_sid_key].dbListener | string).split()
+         + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
-  register: check_listenerLogs_status
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
-  failed_when: check_listenerLogs_status.rc != 4 and check_listenerLogs_status.rc != 0
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_listener_logs_status
+  changed_when: false
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
+  failed_when: standalone_control_role_listener_logs_status.rc not in [0, 4]
 
-- name: print check_listenerLogs status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ check_listenerLogs_status.stdout_lines }}"
-  failed_when: check_listenerLogs_status.rc == 4
-  ignore_errors: yes
+- name: Print check_listenerLogs status for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_listener_logs_status.stdout_lines }}"
+
+- name: Report listener log errors for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: the listener log check of {{ ORACLE_SID }} found errors or a missing log (exit code 4, see the output
+      above); the run goes on (standalone_control_role_fail_on_listener_log_errors is false).
+  when:
+    - standalone_control_role_listener_logs_status.rc == 4
+    - not (standalone_control_role_fail_on_listener_log_errors | bool)
+
+- name: Fail on listener log errors for {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that: standalone_control_role_listener_logs_status.rc != 4
+    fail_msg: >-
+      The listener log check of {{ ORACLE_SID }} found errors or a missing log (exit code 4, see the output above) and
+      standalone_control_role_fail_on_listener_log_errors is true. The database and its listener are started.
+    quiet: true
+  when: standalone_control_role_fail_on_listener_log_errors | bool

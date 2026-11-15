@@ -1,0 +1,12 @@
+---
+# Job inputs (AAP survey / extra vars). Their names are unchanged from the original playbooks and they have no
+# default: target, DATABASE_NAME, TICKET_NUMBER, sid_server_dict (inventory). tasks/validate_job.yml and
+# tasks/validate.yml check them (anchored patterns, "<CHANGE_ME>" rejected). See meta/argument_specs.yml.
+#
+# Format of TICKET_NUMBER (the ServiceNow change number, e.g. CHG0030001). Python regular expression, anchored
+# with \A ... \Z (a pattern without both anchors is rejected). Ticket formats are site-specific, so this
+# generic default can be overridden.
+oracle_common_ticket_number_regex: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+# Require TICKET_NUMBER. The original playbooks used it in every notification and in the change check; it is
+# validated whenever it is supplied, and must be supplied while this is true.
+oracle_common_ticket_required: false

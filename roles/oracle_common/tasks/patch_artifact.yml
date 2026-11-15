@@ -1,0 +1,91 @@
+---
+# Resolves the patch bundle for the selected Oracle version (tasks/oracle_version_select.yml): file name,
+# repository URL, staging directory and staging owner, and checks that the repository folder matches the
+# database release. Needs gathered facts (the default patch year comes from the target's clock) and the OS
+# variables (tasks/os_vars.yml).
+# Output: oracle_common_patch, with keys
+#   file_name     <oracle_common_artifact_platform>_<cycle><year>.tar.gz unless oracle_common_patch_file_name is set
+#   tag           <cycle><year> (e.g. jan26)
+#   repo_dir_url  repository folder holding the bundle (value never printed: it may carry credentials)
+#   url           repo_dir_url/file_name
+#   base_dir      oracle_common_patch_base_dir (the original patch_folder_prefix)
+#   owner         oracle_common_patch_owner (the original b_user)
+#   staging_dir   <base_dir>/software_dir/<staging_component>/<tag>_<SID> unless oracle_common_patch_staging_dir is set
+- name: Resolve the patch bundle
+  ansible.builtin.set_fact:
+    oracle_common_patch:
+      file_name: "{{ __oracle_common_patch_file_name }}"
+      tag: "{{ __oracle_common_patch_tag }}"
+      repo_dir_url: "{{ __oracle_common_repo_dir_url }}"
+      url: "{{ __oracle_common_repo_dir_url }}/{{ __oracle_common_patch_file_name }}"
+      base_dir: "{{ oracle_common_patch_base_dir }}"
+      owner: "{{ oracle_common_patch_owner }}"
+      staging_dir: >-
+        {{ (oracle_common_patch_staging_dir | string) if (oracle_common_patch_staging_dir | string | length > 0)
+           else (oracle_common_patch_base_dir ~ '/software_dir/' ~ oracle_common_oracle_version.staging_component
+                 ~ '/' ~ __oracle_common_patch_tag ~ '_' ~ DATABASE_NAME) }}
+  vars:
+    __oracle_common_patch_tag: "{{ oracle_common_patch_cycle }}{{ oracle_common_patch_year }}"
+    __oracle_common_patch_file_name: >-
+      {{ (oracle_common_patch_file_name | string)
+         if (oracle_common_patch_file_name | string | length > 0)
+         else (oracle_common_artifact_platform ~ '_' ~ __oracle_common_patch_tag ~ '.tar.gz') }}
+    __oracle_common_repo_base: "{{ oracle_common_patch_repo_url | string | regex_replace('/+\\Z', '') }}"
+    __oracle_common_repo_dir_url: >-
+      {{ (__oracle_common_repo_base ~ '/' ~ oracle_common_oracle_version.artifact_dir)
+         if ((oracle_common_patch_repo_version_subdir | bool)
+             and (__oracle_common_repo_base | urlsplit('path') | basename) != oracle_common_oracle_version.artifact_dir)
+         else __oracle_common_repo_base }}
+  no_log: true
+
+- name: Validate the resolved patch bundle
+  ansible.builtin.assert:
+    that: __oracle_common_patch_errors | length == 0
+    fail_msg: "Invalid patch settings: {{ __oracle_common_patch_errors | join(' | ') }}"
+    success_msg: >-
+      Patch bundle {{ oracle_common_patch.file_name }} for {{ oracle_common_oracle_version.label }}, staged in
+      {{ oracle_common_patch.staging_dir }} by {{ oracle_common_patch.owner }}
+  vars:
+    __oracle_common_paths:
+      oracle_common_patch_base_dir (alias patch_folder_prefix): "{{ oracle_common_patch.base_dir }}"
+      oracle_common_patch_staging_dir (alias patch_folder_name): "{{ oracle_common_patch.staging_dir }}"
+    # Release folder named by the last path component of the final repository URL, and the folders of the
+    # other supported releases.
+    __oracle_common_repo_folder: "{{ oracle_common_patch.repo_dir_url | urlsplit('path') | basename }}"
+    __oracle_common_other_folders: >-
+      {{ __oracle_common_oracle_versions | dict2items | rejectattr('key', 'equalto', oracle_common_oracle_version.id)
+         | map(attribute='value.artifact_dir') | map('string') | list }}
+    __oracle_common_repo_base_folder: >-
+      {{ oracle_common_patch_repo_url | string | regex_replace('/+\Z', '') | urlsplit('path') | basename }}
+    __oracle_common_patch_checks:
+      - failed: "{{ not (oracle_common_patch.file_name is match(__oracle_common_re_file_name)) }}"
+        msg: >-
+          patch file name (oracle_common_patch_file_name, or <platform>_<cycle><year>.tar.gz) must be a plain file
+          name; got '{{ oracle_common_patch.file_name }}'
+      - failed: "{{ not ((oracle_common_patch_cycle | string) is match(__oracle_common_re_patch_cycle)) }}"
+        msg: "oracle_common_patch_cycle (alias oracle_patch_cycle) must be 1-16 letters or digits, e.g. jan; got '{{ oracle_common_patch_cycle }}'"
+      - failed: "{{ not ((oracle_common_patch_year | string) is match(__oracle_common_re_patch_year)) }}"
+        msg: "oracle_common_patch_year (alias oracle_patch_year) must be 2 or 4 digits, e.g. 26; got '{{ oracle_common_patch_year }}'"
+      - failed: "{{ not (oracle_common_patch.owner is match(__oracle_common_re_posix_name)) }}"
+        msg: "oracle_common_patch_owner (alias b_user) must be a POSIX user name; got '{{ oracle_common_patch.owner }}'"
+      - failed: "{{ __oracle_common_invalid_path_names | length > 0 }}"
+        msg: >-
+          {{ __oracle_common_invalid_path_names | join(', ') }}: must be an absolute path of letters, digits and . _ / -
+          without a '..' component (and not the root directory)
+      - failed: >-
+          {{ not ((oracle_common_patch.repo_dir_url | string) is match(__oracle_common_re_https_url
+                   if not (oracle_common_patch_repo_allow_http | bool) else __oracle_common_re_http_url)) }}
+        msg: "patch repository URL (oracle_common_patch_repo_url, alias artifactory_repo) must be an https URL (value not shown)"
+      # The original compared fixed character offsets of the repository URL and the staging folder. Explicit
+      # comparison: the repository folder must be the release folder of the detected version, and a base URL
+      # must not already name the folder of another release.
+      - failed: >-
+          {{ (oracle_common_patch_repo_version_check | bool)
+             and (__oracle_common_repo_folder != (oracle_common_oracle_version.artifact_dir | string)
+                  or __oracle_common_repo_base_folder in __oracle_common_other_folders) }}
+        msg: >-
+          Repository folder '{{ __oracle_common_repo_folder }}' does not match the database release
+          {{ oracle_common_oracle_version.label }} (expected folder '{{ oracle_common_oracle_version.artifact_dir }}').
+          Validate oracle_common_patch_repo_url (alias artifactory_repo) and retry, or set
+          oracle_common_patch_repo_version_check=false if the repository folders are not named after the release
+    __oracle_common_patch_errors: "{{ __oracle_common_patch_checks | selectattr('failed') | map(attribute='msg') | list }}"

@@ -1,0 +1,578 @@
+---
+# Variable reference for the shared configuration. Defaults live in ../defaults/main/*.yml (one file per
+# concern); tasks/validate_job.yml and tasks/validate.yml apply the format checks that argument specs cannot
+# express (anchored patterns, the '..' path rule, mode normalisation, checksum format, "<CHANGE_ME>").
+argument_specs:
+  main:
+    short_description: Guard the platform, load per-OS and per-version variables, and validate every input.
+    description:
+      - Refuses unsupported platforms (EL7 and older, Amazon Linux 2, kernels other than Linux and AIX), naming
+        the actual distribution and version.
+      - Loads vars/<system>.yml, <os_family>.yml, <distribution>.yml, <os_family>-<major>.yml and
+        <distribution>-<major>.yml (generic first, most specific last).
+      - Loads the supported Oracle versions, one file each in vars/oracle_versions/ (12.1, 12.2, 19, 23ai, 26ai).
+      - Validates the job inputs and the environment configuration, reporting every problem at once.
+      - Must run (import_role) at the start of the target play, before initialization_role. The target plays set
+        gather_facts false - this role reads the OS release without Python first (EL7 and Amazon Linux 2 cannot run
+        ansible-core 2.22 modules), then gathers the facts.
+      - Derived values, overridable but not listed as options because their defaults are templates -
+        oracle_common_remote_script_directory (alias remote_script_directory; <oracle_common_staging_base>/ora_ansible_scripts_<DATABASE_NAME>),
+        oracle_common_remote_output_directory (alias remote_output_directory; <oracle_common_staging_base>/ora_db_patch_<DATABASE_NAME>),
+        oracle_common_env_file (<oracle_common_env_dir>/<DATABASE_NAME>.env),
+        oracle_common_patch_year (alias oracle_patch_year; last two digits of the target's year),
+        oracle_common_patch_base_dir (alias patch_folder_prefix; selected by oracle_common_is_grid_layout),
+        oracle_common_patch_owner (alias b_user; selected by oracle_common_is_grid_layout).
+      - Per-OS values from vars/<os>.yml (oracle_common_artifact_platform, oracle_common_package_manager,
+        oracle_common_package_query_command, oracle_common_package_query_regex, oracle_common_prereq_packages, and the
+        group membership commands oracle_common_group_add_command (argument vector called as <command...> <member>
+        <group>; gpasswd --add on Linux, chgrpmem -m + on AIX), oracle_common_group_members_command (<command...> <group>;
+        getent group / lsgroup -a users) and oracle_common_group_members_regex) can be overridden per host or group; they
+        are not listed because they are only known after the OS variables are loaded.
+    options:
+      target:
+        type: str
+        required: true
+        description: Comma or space separated list of target hosts (AAP survey / extra var). Each must be a host name or IP address.
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch; key into sid_server_dict. Must fully match [A-Za-z][A-Za-z0-9_]{0,29}.
+      sid_server_dict:
+        type: dict
+        required: true
+        description:
+          - Inventory dictionary of databases keyed by ORACLE_SID, each with dbowner (POSIX user), pdb, dbvip,
+            dbListener and pdbListener. See inventory/example/group_vars/all/main.yml.
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number (e.g. CHG0030001). Validated with oracle_common_ticket_number_regex when supplied.
+      override_chg:
+        type: raw
+        description: Skip the ServiceNow change check. Boolean; the legacy strings "true" / "false" are accepted.
+      oracle_common_ticket_number_regex:
+        type: str
+        default: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+        description: Python regex for TICKET_NUMBER, anchored with \A ... \Z.
+      oracle_common_ticket_required:
+        type: bool
+        default: false
+        description: Require TICKET_NUMBER.
+      oracle_common_patch_repo_url:
+        type: str
+        description:
+          - Required. https base URL of the patch repository. Defaults to artifactory_repo (the original input name).
+          - The release folder (artifact_dir of the version, e.g. 19.0.0) is appended unless
+            oracle_common_patch_repo_version_subdir is false or the URL already ends with it.
+      artifactory_repo:
+        type: str
+        description: Original name of oracle_common_patch_repo_url, still accepted. It names the release folder, so nothing is appended to it.
+      oracle_common_patch_repo_version_subdir:
+        type: raw
+        description: Append the release folder to the repository URL. Default true, or false when artifactory_repo is supplied.
+      oracle_common_patch_repo_version_check:
+        type: bool
+        default: true
+        description: The repository folder must be the release folder of the detected database version (replaces the original fixed-offset check).
+      oracle_common_patch_repo_allow_http:
+        type: bool
+        default: false
+        description: Opt-in only. Accept a plain http repository URL.
+      oracle_common_patch_checksum:
+        type: str
+        description:
+          - Required. Checksum of the patch bundle - <algorithm>:<hex digest> (md5, sha1, sha224, sha256, sha384 or
+            sha512 with that algorithm's exact digest length, not all zeros) or <algorithm>:<https URL of a checksum file>.
+          - Alias oracle_patch_checksum.
+      oracle_common_patch_cycle:
+        type: str
+        description: Patch cycle in the default file name <AIX|LINUX>_<cycle><year>.tar.gz. Default jan (the original). Alias oracle_patch_cycle.
+      oracle_common_patch_file_name:
+        type: str
+        description: Explicit patch bundle file name, overriding the derived one. Aliases oracle_patch_file_name and patch_file_name.
+      oracle_common_patch_staging_dir:
+        type: str
+        description: Explicit patch staging directory. Empty derives <base_dir>/software_dir/<version>/<cycle><year>_<SID>. Alias patch_folder_name.
+      oracle_common_is_grid_layout:
+        type: raw
+        description: Grid layout (true) or Oracle layout (false, the default). Alias is_grid_layout; the legacy strings "true" / "false" are accepted.
+      is_grid_layout:
+        type: raw
+        description: Original name of oracle_common_is_grid_layout, still accepted.
+      oracle_common_patch_base_dir_oracle:
+        type: str
+        default: /u01/oracle
+        description: Patch base directory for the Oracle layout.
+      oracle_common_patch_base_dir_grid:
+        type: str
+        default: /u02/grid
+        description: Patch base directory for the Grid layout.
+      oracle_common_patch_owner_oracle:
+        type: str
+        default: oracle
+        description: Owner of the staged patch for the Oracle layout.
+      oracle_common_patch_owner_grid:
+        type: str
+        default: grid
+        description: Owner of the staged patch for the Grid layout.
+      oracle_common_staging_base:
+        type: str
+        description:
+          - Base of the per-database script and output directories. Default <oracle_common_patch_base_dir_oracle>/ansible_patch_work
+            (a dedicated directory under the Oracle base, created by the database owner with oracle_common_dir_mode), no
+            longer the world-writable /tmp. /tmp still works when set explicitly (with a warning); a world-writable parent
+            without the sticky bit is refused.
+      oracle_common_script_permission:
+        type: raw
+        description:
+          - Mode of the copied scripts. Default "0750". Alias script_permission.
+          - Group- or world-writable modes (such as 0777) are rejected.
+      script_permission:
+        type: raw
+        description: Original name of oracle_common_script_permission, still accepted (0777 is no longer allowed).
+      oracle_common_dir_mode:
+        type: raw
+        description: Mode of the working, output and staging directories. Default "0750". Group- or world-writable modes are rejected.
+      oracle_common_file_mode:
+        type: raw
+        description: Mode of the downloaded patch bundle. Default "0640". Group- or world-writable modes are rejected.
+      oracle_common_work_group:
+        type: str
+        default: ""
+        description:
+          - Group of the directories and files created on the target. Empty - the creating user's primary group.
+          - Set it to the group the database owner and the patch staging owner share when they are different users (Grid layout).
+      oracle_common_patch_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the patch repository. false is an opt-in (the checksum is still verified).
+      oracle_common_patch_ca_path:
+        type: str
+        default: ""
+        description: >-
+          Optional CA bundle (PEM, on the target) used to verify the patch repository, in addition to the system trust
+          store (passed to the download as SSL_CERT_FILE).
+      oracle_common_patch_use_proxy:
+        type: bool
+        default: false
+        description: Use a proxy for the patch download (the original did not).
+      oracle_common_patch_proxy:
+        type: str
+        default: ""
+        description: Optional proxy URL for the patch download when oracle_common_patch_use_proxy is true.
+      oracle_common_patch_repo_username:
+        type: str
+        no_log: true
+        description: Patch repository user for HTTP basic authentication. Default vault_patch_repo_username (Ansible Vault).
+      oracle_common_patch_repo_password:
+        type: str
+        no_log: true
+        description: Patch repository password. Default vault_patch_repo_password (Ansible Vault). Set both or neither.
+      vault_patch_repo_username:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the patch repository user.
+      vault_patch_repo_password:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the patch repository password.
+      oracle_common_patch_force_basic_auth:
+        type: bool
+        default: true
+        description: Send the repository credentials with the first request (the original force_basic_auth).
+      oracle_common_env_dir:
+        type: str
+        default: /local
+        description: Directory of the <SID>.env environment files.
+      oracle_common_env_file_allow_any_owner:
+        type: raw
+        description: >-
+          true (or the strings "true" / "false") also accepts a <SID>.env environment file owned by another account
+          than the database owner or root: the bundled scripts get ORA_ENV_FILE_ALLOW_ANY_OWNER=true. A world-writable
+          file is always refused. Alias oracle_patch_env_file_allow_any_owner. Default false.
+      oracle_patch_env_file_allow_any_owner:
+        type: raw
+        description: Short alias of oracle_common_env_file_allow_any_owner.
+      oracle_common_manage_group_membership:
+        type: bool
+        default: true
+        description: Add the database owner and the patch staging owner to oracle_common_group_name.
+      oracle_common_group_name:
+        type: str
+        description: Required while oracle_common_manage_group_membership is true. Alias GROUP_NAME.
+      oracle_common_group_membership_become_user:
+        type: str
+        default: root
+        description: >-
+          User the group membership change runs as, through Ansible become (the become method comes from the inventory;
+          no raw sudo).
+      GROUP_NAME:
+        type: str
+        description: Original name of oracle_common_group_name, still accepted.
+      oracle_common_oracle_version_overrides:
+        type: dict
+        default: {}
+        description: Per-environment overrides of the per-version values, keyed by version (12.1, 12.2, 19, 23ai, 26ai).
+      oracle_common_db_version:
+        type: str
+        description: Use this version entry instead of detecting it (e.g. 26ai). Alias oracle_patch_db_version.
+      oracle_common_supported_systems:
+        type: list
+        elements: str
+        default: [Linux, AIX]
+        description: Kernel names (ansible_facts.system) that are supported.
+      oracle_common_check_packages:
+        type: bool
+        default: true
+        description: Check the prerequisite packages of the OS release.
+
+  validate_job:
+    short_description: Validate the job inputs only (no facts needed; used on localhost before the change check).
+    options:
+      target:
+        type: str
+        required: true
+        description: Comma or space separated list of target hosts.
+      DATABASE_NAME:
+        type: str
+        required: true
+        description: ORACLE_SID of the database to patch.
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID.
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number.
+      override_chg:
+        type: raw
+        description: Skip the ServiceNow change check (boolean or legacy "true" / "false" string).
+
+  guard:
+    short_description: Refuse unsupported platforms (EL7 and older, Amazon Linux 2, unsupported kernels).
+    description:
+      - When no facts have been gathered, first reads the OS release without Python (static raw command) and refuses
+        EL7 and older and Amazon Linux 2 (guard_os_release.yml), then gathers the facts and checks them.
+    options: {}
+
+  guard_os_release:
+    short_description: Refuse EL7 and older and Amazon Linux 2 from the text of uname -s and /etc/os-release, without Python.
+    options:
+      oracle_common_os_release_text:
+        type: str
+        description: Output of `uname -s; cat /etc/os-release; cat /etc/redhat-release` on the target.
+
+  os_vars:
+    short_description: Load the layered OS variable files. Needs facts.
+    options: {}
+
+  oracle_version:
+    short_description: Build the registry of supported Oracle versions from vars/oracle_versions/*.yml.
+    options: {}
+
+  oracle_version_select:
+    short_description: Select the supported-version entry for the detected database version.
+    options:
+      oracle_common_detected_version:
+        type: str
+        required: true
+        description:
+          - v$instance.version reported by the database, e.g. 19.0.0.0.0 (23.0.0.0.0 on both 23ai and 26ai).
+          - Its first four characters are returned as oracle_common_detected_release (the original db_ver).
+      oracle_common_detected_version_full:
+        type: str
+        required: false
+        default: ""
+        description:
+          - v$instance.version_full (18c and later), e.g. 19.21.0.0.0, 23.7.0.0.0 or 23.26.0.0.0; empty when not available.
+          - When non-empty it selects the version entry instead of oracle_common_detected_version, so 26ai (release
+            update 23.26 and later) is told apart from 23ai. An explicit oracle_common_db_version still wins.
+
+  patch_artifact:
+    short_description: Resolve the patch bundle file name, repository URL and staging directory, and check the repository release folder.
+    options: {}
+
+  validate:
+    short_description: Validate the job inputs and the environment configuration.
+    options: {}
+
+  packages:
+    short_description: Check the prerequisite packages (AIX - filesets) of the OS release.
+    options: {}
+
+  notify:
+    short_description: Send the Teams notification card (Teams Workflows webhook, Adaptive Card). Best effort.
+    description:
+      - Entry point of notification.yml. Builds the card (tasks/notify_payload.yml) and posts it with ansible.builtin.uri
+        (tasks/notify_send.yml, no_log). A notification that is skipped or cannot be sent is reported as a WARNING and
+        never fails the run.
+      - Skipped with a message when oracle_common_notify_enabled is false, the webhook URL is empty, still "<CHANGE_ME>"
+        or not https, or summary_state is not a card of oracle_common_notify_states.
+      - Card facts - Database (DATABASE_NAME), Host (target), Change Ticket (TICKET_NUMBER), URL (job link), Running User,
+        Scheduled Job Name. AAP / AWX job variables are read as awx_* first, then the original tower_* names
+        (tower_user_name, tower_schedule_name, tower_job_id, tower_job_template_name), then CLI defaults
+        (scheduler, manual job, n/a, manual run).
+    options:
+      call:
+        type: str
+        required: true
+        description:
+          - The job state - start, success, unneeded, fail (summary_state patching); start_prereq, success_prereq,
+            failure (summary_state prereq). Any other value sends a failure card (oracle_common_notify_default_state).
+      summary_state:
+        type: str
+        required: true
+        description: The card - patching or prereq (keys of oracle_common_notify_states).
+      oracle_common_notify_webhook_url:
+        type: str
+        no_log: true
+        description:
+          - Teams Workflows webhook URL (https). A secret - default vault_teams_webhook_url (Ansible Vault); alias
+            teams_webhook_url. Empty or "<CHANGE_ME>" - the notification is skipped.
+      vault_teams_webhook_url:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the Teams Workflows webhook URL (see inventory/example/group_vars/all/vault.yml.example).
+      teams_webhook_url:
+        type: str
+        no_log: true
+        description: Alias of oracle_common_notify_webhook_url.
+      oracle_common_notify_enabled:
+        type: raw
+        description: Send notifications (default true). Boolean; the strings "true" / "false" are accepted.
+      oracle_common_notify_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the webhook endpoint.
+      oracle_common_notify_ca_path:
+        type: str
+        default: ""
+        description: Optional CA bundle (PEM) on the sending host used to verify the webhook endpoint.
+      oracle_common_notify_proxy:
+        type: str
+        description: Optional HTTPS proxy for the post (no default). Alias notify_proxy.
+      notify_proxy:
+        type: str
+        description: Alias of oracle_common_notify_proxy.
+      oracle_common_notify_timeout:
+        type: int
+        default: 30
+        description: Seconds to wait for the webhook.
+      oracle_common_notify_delegate_to:
+        type: str
+        default: localhost
+        description: Host that posts the card. Empty - the host running the play (the original behaviour of the target plays).
+      oracle_common_notify_aap_base_url:
+        type: str
+        description: https base URL of AAP / AWX / Tower for the job link. Alias aap_base_url. Empty - the URL fact is "n/a".
+      aap_base_url:
+        type: str
+        description: Alias of oracle_common_notify_aap_base_url.
+      oracle_common_notify_job_url_path:
+        type: str
+        default: /#/jobs/playbook/
+        description: Path of a job page, appended to the base URL before the job id (AAP 2.5+ - /execution/jobs/playbook/).
+      oracle_common_notify_states:
+        type: dict
+        description:
+          - Card text and Adaptive Card colour per summary_state and call, e.g. patching.start = {text started, colour Good}.
+            The defaults keep every original state and text; 13E81D -> Good, 11A8E8 -> Accent, f21818 -> Attention.
+      oracle_common_notify_default_state:
+        type: dict
+        description: Text and colour for any other call (default failed / Attention).
+      awx_user_name:
+        type: str
+        description: AAP / AWX job variable - the launching user (Running User). Falls back to tower_user_name, then scheduler.
+      tower_user_name:
+        type: str
+        description: Original name of awx_user_name, still accepted.
+      awx_schedule_name:
+        type: str
+        description: AAP / AWX job variable - the schedule (Scheduled Job Name). Falls back to tower_schedule_name, then manual job.
+      tower_schedule_name:
+        type: str
+        description: Original name of awx_schedule_name, still accepted.
+      awx_job_id:
+        type: raw
+        description: AAP / AWX job variable - the job id (card title and job link). Falls back to tower_job_id, then n/a.
+      tower_job_id:
+        type: raw
+        description: Original name of awx_job_id, still accepted.
+      awx_job_template_name:
+        type: str
+        description: AAP / AWX job variable - the job template (card title). Falls back to tower_job_template_name, then manual run.
+      tower_job_template_name:
+        type: str
+        description: Original name of awx_job_template_name, still accepted.
+
+  notify_payload:
+    short_description: Build the Teams Adaptive Card for call / summary_state into __oracle_common_notify_body (no network).
+    options:
+      call:
+        type: str
+        required: true
+        description: The job state (see the notify entry point).
+      summary_state:
+        type: str
+        required: true
+        description: The card - patching or prereq.
+
+  notify_send:
+    short_description: Post __oracle_common_notify_body to the Teams webhook (no_log, best effort). Used by notify.
+    options: {}
+
+  change_ticket:
+    short_description: ServiceNow change check (servicenow.itsm.change_request_info), skipped when override_chg is true.
+    description:
+      - Entry point of oracle_chg_ticket.yml. The change record TICKET_NUMBER must exist and its state must be within
+        oracle_common_snow_allowed_state_min .. _max (default -2 Scheduled .. -1 Implement, the original check).
+      - Credentials only from the Ansible Vault (vault_snow_instance, vault_snow_user, vault_snow_password) or the
+        original names snow_instance, snow_user, snow_password; every task that touches them runs with no_log, and only
+        the ticket number and the record state are printed.
+    options:
+      TICKET_NUMBER:
+        type: str
+        description: Change ticket number. Required when the check runs; must match oracle_common_ticket_number_regex.
+      override_chg:
+        type: raw
+        description: Skip the change check. Boolean (default false); the legacy strings "true" / "false" are accepted.
+      oracle_common_override_chg:
+        type: raw
+        description: New name of override_chg (defaults to it).
+      oracle_common_ticket_number_regex:
+        type: str
+        default: '\A[A-Za-z]{2,10}[0-9]{1,20}\Z'
+        description: Python regex for TICKET_NUMBER, anchored with \A ... \Z.
+      oracle_common_snow_instance:
+        type: str
+        no_log: true
+        description:
+          - ServiceNow instance - https URL or bare instance name (https://<name>.<oracle_common_snow_instance_domain>).
+            Default snow_instance, then vault_snow_instance.
+      oracle_common_snow_username:
+        type: str
+        no_log: true
+        description: ServiceNow user. Default snow_user, then vault_snow_user.
+      oracle_common_snow_password:
+        type: str
+        no_log: true
+        description: ServiceNow password. Default snow_password, then vault_snow_password.
+      snow_instance:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow instance, still accepted.
+      snow_user:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow user, still accepted.
+      snow_password:
+        type: str
+        no_log: true
+        description: Original name of the ServiceNow password, still accepted.
+      vault_snow_instance:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow instance.
+      vault_snow_user:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow user.
+      vault_snow_password:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the ServiceNow password.
+      oracle_common_snow_instance_domain:
+        type: str
+        default: service-now.com
+        description: Domain appended to a bare instance name.
+      oracle_common_snow_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the ServiceNow instance.
+      oracle_common_snow_timeout:
+        type: int
+        default: 30
+        description: Seconds to wait for ServiceNow.
+      oracle_common_snow_proxy:
+        type: str
+        description: Optional HTTPS proxy for the ServiceNow query (no default). Alias snow_proxy.
+      snow_proxy:
+        type: str
+        description: Alias of oracle_common_snow_proxy.
+      oracle_common_snow_allowed_state_min:
+        type: int
+        default: -2
+        description: Lowest allowed ServiceNow numeric change state (default -2, Scheduled).
+      oracle_common_snow_allowed_state_max:
+        type: int
+        default: -1
+        description: Highest allowed ServiceNow numeric change state (default -1, Implement).
+      oracle_common_snow_change_states:
+        type: dict
+        description: State names returned by servicenow.itsm mapped to ServiceNow numeric states (new -5 ... canceled 4).
+
+  change_ticket_check:
+    short_description: Validate the change-check settings, query the change record and check its state. Used by change_ticket.
+    options: {}
+
+  change_ticket_state:
+    short_description: Check the queried change record (__oracle_common_chg_result) - exactly one record, state in the allowed range.
+    options: {}
+
+  progress:
+    short_description: Record how far this run got on the host (oracle_common_progress), for the failure report.
+    description:
+      - Merges oracle_common_progress_update into oracle_common_progress (recursive combine). Keys - databases
+        (per SID - starting, started, stopping or stopped; standalone_control_role), home (patching or patched) and
+        datapatch (per SID - running or done; oracle_database_patch_role tasks/patch_step.yml).
+    options:
+      oracle_common_progress_update:
+        type: dict
+        required: true
+        description: "The progress to record, e.g. {databases: {ORCL01: stopped}}."
+
+  failure_record:
+    short_description: Record the failed stage, task, error, exit code and last output lines (oracle_common_failure).
+    description:
+      - Call it first in a rescue section that runs other tasks (a cleanup) before tasks/failure_report.yml, so they
+        cannot replace ansible_failed_task / ansible_failed_result.
+    options:
+      oracle_common_failure_stage:
+        type: str
+        required: true
+        description: Name of the failed stage, e.g. Initialize, Shutdown, Patch.
+      oracle_common_failure_msg_max_length:
+        type: int
+        default: 2000
+        description: Longest error message kept from the failed task (characters).
+      oracle_common_failure_output_lines:
+        type: int
+        default: 10
+        description: Last lines of the failed task's output added to the report; 0 leaves them out.
+
+  failure_report:
+    short_description: End a failed stage - notification (best effort), then a failure with the state left behind.
+    description:
+      - Records the failure first unless tasks/failure_record.yml already did for this stage.
+      - Shows and reports the state left behind (oracle_common_failure_state) - databases this run stopped or failed to
+        start, whether the Oracle home was patched (unknown when a patch step failed part-way), datapatch per database,
+        and the files kept for diagnosis or removed - from oracle_common_progress and oracle_common_run.
+      - Sends the notification through tasks/notify.yml (a send error is a WARNING, never fatal), then fails the host
+        with "Fail - <stage> failed on <host> in task '<task>' - <error>" and the state.
+    options:
+      oracle_common_failure_stage:
+        type: str
+        required: true
+        description: Name of the failed stage, e.g. Initialize, Shutdown, Patch.
+      oracle_common_failure_call:
+        type: str
+        default: fail
+        description: Notification state (the prerequisite rescue passes unneeded for an already applied patch with
+          oracle_common_fail_when_already_applied).
+      oracle_common_failure_summary_state:
+        type: str
+        default: patching
+        description: Notification card (patching or prereq).
+      oracle_common_failure_cleanup_done:
+        type: bool
+        default: false
+        description: true when the rescue removed this run's script and staging directories before the report.

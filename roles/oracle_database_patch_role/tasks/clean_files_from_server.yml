@@ -1,21 +1,21 @@
 ---
-- name: Cleanup patching files
-  become: yes
-  become_user: "{{ b_user }}"
-  file:
-    state: absent
-    path: "{{ patch_folder_name }}"
+# Removes what this run created, and nothing else: the patch staging directory and the script directory, which
+# copy_files_to_server.yml and initialization_role (tasks/run_dir.yml) record when they create them. A path this run did
+# not create (another run's, another database's, or one that existed before) is never removed. The working (log)
+# directories are kept, as before. Best effort: a path that cannot be removed is reported as a WARNING, never hidden,
+# and the run goes on (used after the run and in the failure handling of the playbooks).
+- name: Remove the paths created by this run
+  ansible.builtin.include_tasks: remove_run_path.yml
+  loop: >-
+    {{ ((initialization_role_created_paths | default([])) + (oracle_database_patch_role_created_paths | default([])))
+       | selectattr('remove') | list }}
+  loop_control:
+    loop_var: __oracle_database_patch_role_path
+    label: "{{ __oracle_database_patch_role_path.path }}"
 
-- name: Remove {{ remote_script_directory }} if exists
-  block:
-    - name: Remove {{ remote_script_directory }} if exists - ansibleUser
-      ansible.builtin.file:
-        path: "{{ remote_script_directory }}"
-        state: absent
-  rescue:
-    - name: Remove {{ remote_script_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
-      become: yes
-      become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
-      ansible.builtin.file:
-        path: "{{ remote_script_directory }}"
-        state: absent
+- name: Report that this run created nothing to remove
+  ansible.builtin.debug:
+    msg: "Nothing to remove: this run has not created a staging or script directory on {{ inventory_hostname }}."
+  when: >-
+    ((initialization_role_created_paths | default([])) + (oracle_database_patch_role_created_paths | default([])))
+    | selectattr('remove') | list | length == 0

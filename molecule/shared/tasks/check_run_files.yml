@@ -1,0 +1,78 @@
+---
+# Checks what the runs of converge left on a host (call it right after converge, before any re-run in verify):
+#   - the patch staging directories and the script directories of the runs so far were removed; the working (log)
+#     directory of DATABASE_NAME of every run is kept (molecule_expected_work_dirs, default 1), owned by the database
+#     owner, mode 0750 (oracle_common_dir_mode), with the version found;
+#   - the database owner joined the automation group (oracle_common_group_name, alias GROUP_NAME);
+#   - the bundle and its checksum file were downloaded over https from the test repository (its access log): the
+#     checksum is required and was fetched, and the TLS certificate was verified (the download would fail otherwise).
+- name: Find the patch staging directories
+  ansible.builtin.find:
+    paths: "{{ molecule_oracle_base }}/software_dir"
+    file_type: directory
+    recurse: true
+    depth: 2
+  register: __molecule_run_staging
+
+- name: Find the script and working directories
+  ansible.builtin.find:
+    paths: "{{ molecule_oracle_base }}/ansible_patch_work"
+    file_type: directory
+    patterns: "ora_ansible_scripts_*,ora_db_patch_*"
+  register: __molecule_run_dirs
+
+- name: Read the version recorded in the working directories
+  ansible.builtin.slurp:
+    src: "{{ item.path }}/db_version.txt"
+  loop: "{{ __molecule_run_dirs.files | selectattr('path', 'search', '/ora_db_patch_') | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: __molecule_run_versions
+
+# software_dir/<staging component>/<cycle><year>_<SID>_<run id>: only software_dir/19.0 may be left. One working
+# directory per run so far (molecule_expected_work_dirs, default 1), each kept with its logs.
+- name: Check the staging and script directories were removed and the working directories kept
+  ansible.builtin.assert:
+    that:
+      - __molecule_run_staging.files | map(attribute='path') | reject('match', '.*/software_dir/[^/]+\Z') | list | length == 0
+      - __molecule_script_dirs | length == 0
+      - __molecule_work_dirs | length == molecule_expected_work_dirs | default(1) | int
+      - __molecule_work_dirs | map(attribute='path') | reject('search', '/ora_db_patch_' ~ DATABASE_NAME ~ '_') | list | length == 0
+      - __molecule_work_dirs | map(attribute='pw_name') | reject('equalto', 'oracle') | list | length == 0
+      - __molecule_work_dirs | map(attribute='mode') | reject('equalto', '0750') | list | length == 0
+      - __molecule_versions | reject('equalto', molecule_db_version) | list | length == 0
+    fail_msg: >-
+      Expected no staging or script directory and {{ molecule_expected_work_dirs | default(1) }} working directory(ies) for
+      {{ DATABASE_NAME }} (oracle, 0750, version {{ molecule_db_version }}); staging:
+      {{ __molecule_run_staging.files | map(attribute='path') | list }}; other: {{ __molecule_run_dirs.files | map(attribute='path') | list }};
+      versions {{ __molecule_versions }}
+  vars:
+    __molecule_script_dirs: "{{ __molecule_run_dirs.files | selectattr('path', 'search', '/ora_ansible_scripts_') | list }}"
+    __molecule_work_dirs: "{{ __molecule_run_dirs.files | selectattr('path', 'search', '/ora_db_patch_') | list }}"
+    __molecule_versions: "{{ __molecule_run_versions.results | map(attribute='content') | map('b64decode') | map('trim') | list }}"
+
+- name: Look up the automation group
+  ansible.builtin.command:
+    argv: [getent, group, "{{ molecule_automation_group }}"]
+  register: __molecule_run_group
+  changed_when: false
+
+- name: Check the database owner joined the automation group
+  ansible.builtin.assert:
+    that: "'oracle' in __molecule_run_group.stdout.split(':')[3].split(',')"
+    fail_msg: "{{ __molecule_run_group.stdout }}"
+
+- name: Read the repository access log
+  ansible.builtin.slurp:
+    src: "{{ molecule_repository.access_log }}"
+  register: __molecule_run_access_log
+
+- name: Check the bundle and its checksum file were downloaded over https
+  ansible.builtin.assert:
+    that:
+      - __molecule_access | select('search', '"GET ' ~ __molecule_path ~ '.sha256 HTTP/1.1" 200') | list | length >= 1
+      - __molecule_access | select('search', '"GET ' ~ __molecule_path ~ ' HTTP/1.1" 200') | list | length >= 1
+    fail_msg: "Expected GET {{ __molecule_path }} and {{ __molecule_path }}.sha256; access log: {{ __molecule_access }}"
+  vars:
+    __molecule_path: "/oracledatabase/{{ molecule_repository.release }}/{{ molecule_bundle_file }}"
+    __molecule_access: "{{ (__molecule_run_access_log.content | b64decode).splitlines() }}"

@@ -1,0 +1,76 @@
+---
+# Patch bundle selection, download location and staging.
+#
+# --- Patch file name --------------------------------------------------------------------------
+# Default name: <AIX|LINUX>_<cycle><year>.tar.gz, which reproduces the original <AIX|LINUX>_jan<YY>.tar.gz.
+# Patch cycle, e.g. jan, apr, jul, oct (the original was always jan). Alias: oracle_patch_cycle.
+oracle_common_patch_cycle: "{{ oracle_patch_cycle | default('jan') }}"
+# Year of the cycle, two (or four) digits. Default: the last two digits of the target's current year (the
+# original behaviour). Alias: oracle_patch_year.
+oracle_common_patch_year: "{{ oracle_patch_year | default((ansible_facts['date_time']['year'] | string)[-2:]) }}"
+# Explicit file name in the repository, overriding the derived name. Aliases: oracle_patch_file_name and
+# patch_file_name (the original fact, which could already be overridden with -e).
+oracle_common_patch_file_name: "{{ oracle_patch_file_name | default(patch_file_name | default('')) }}"
+# Expected checksum of the patch bundle (required): <algorithm>:<hex digest> with algorithm md5, sha1, sha224,
+# sha256, sha384 or sha512 (sha256 recommended) and exactly that algorithm's digest length, or
+# <algorithm>:<https URL of a checksum file>. Take it from a trusted source. Alias: oracle_patch_checksum.
+oracle_common_patch_checksum: "{{ oracle_patch_checksum | default('') }}"
+
+# --- Artifact repository ------------------------------------------------------------------
+# Base URL of the patch repository (required, https; no default because it is site-specific). The original
+# input name artifactory_repo is accepted as an alias.
+oracle_common_patch_repo_url: "{{ artifactory_repo | default('') }}"
+# Append the Oracle release folder (artifact_dir of vars/oracle_versions/<version>.yml, e.g. 19.0.0) to the
+# base URL. artifactory_repo (the original input) already names the release folder, so the default is false
+# when it is supplied and true otherwise. A URL that already ends with this release's folder is used as is.
+oracle_common_patch_repo_version_subdir: "{{ artifactory_repo is not defined }}"
+# Check that the repository folder matches the detected database release (replaces the original fixed-offset
+# comparison of the repository URL and the staging folder): the last path component of the final repository
+# URL must be the release folder of the detected version. Set false only for a repository whose folders are
+# not named after the release.
+oracle_common_patch_repo_version_check: true
+# Plain http repository URLs are rejected. Opt-in only, knowingly: the patch could be tampered with in transit.
+oracle_common_patch_repo_allow_http: false
+
+# --- Download transport and credentials -------------------------------------------------------------
+# The download (oracle_database_patch_role tasks/copy_files_to_server.yml, run on the target) verifies the TLS
+# certificate of the repository (the original did not). Turning it off is an opt-in for a repository with a
+# certificate the target cannot verify; prefer oracle_common_patch_ca_path. The bundle's checksum
+# (oracle_common_patch_checksum) is verified either way.
+oracle_common_patch_validate_certs: true
+# Optional CA bundle (PEM file on the target), e.g. an internal CA, trusted in addition to the system trust store
+# (passed to the download as SSL_CERT_FILE). Empty: the system trust store only.
+oracle_common_patch_ca_path: ""
+# Use a proxy for the download. Default false (the original use_proxy: no). When true, the proxy environment of the
+# connection is used, or oracle_common_patch_proxy when set (e.g. http://proxy.example.com:8080; no default).
+oracle_common_patch_use_proxy: false
+oracle_common_patch_proxy: ""
+# Repository credentials for HTTP basic authentication, from the Ansible Vault (vault_patch_repo_username,
+# vault_patch_repo_password) or an AAP credential; never put them in the repository URL. Empty (the default): no
+# credentials are sent, as before (a URL that still carries user-info keeps working, but is discouraged).
+oracle_common_patch_repo_username: "{{ vault_patch_repo_username | default('') }}"
+oracle_common_patch_repo_password: "{{ vault_patch_repo_password | default('') }}"
+# Send the credentials with the first request (the original force_basic_auth: yes) instead of waiting for a 401.
+oracle_common_patch_force_basic_auth: true
+
+# --- Staging ----------------------------------------------------------------------------------
+# Database layout: false = Oracle (the patch is staged under oracle_common_patch_base_dir_oracle by
+# oracle_common_patch_owner_oracle), true = Grid (oracle_common_patch_base_dir_grid,
+# oracle_common_patch_owner_grid). The original input is_grid_layout is accepted as an alias, as a boolean or
+# as the legacy strings "true" / "false".
+oracle_common_is_grid_layout: "{{ is_grid_layout | default(false) }}"
+oracle_common_patch_base_dir_oracle: /u01/oracle
+oracle_common_patch_base_dir_grid: /u02/grid
+oracle_common_patch_owner_oracle: oracle
+oracle_common_patch_owner_grid: grid
+# Selected by the layout; the original names patch_folder_prefix and b_user are accepted as aliases.
+oracle_common_patch_base_dir: >-
+  {{ patch_folder_prefix | default(oracle_common_patch_base_dir_grid if ((oracle_common_is_grid_layout | string | lower) in ['true', 'yes', 'on', '1', 'y'])
+     else oracle_common_patch_base_dir_oracle) }}
+# Patch staging directory. Empty: <oracle_common_patch_base_dir>/software_dir/<staging_component of the version>/
+# <cycle><year>_<SID> (the original <prefix>/software_dir/<db_ver>/jan<YY>_<SID>). The original name
+# patch_folder_name is accepted as an alias.
+oracle_common_patch_staging_dir: "{{ patch_folder_name | default('') }}"
+oracle_common_patch_owner: >-
+  {{ b_user | default(oracle_common_patch_owner_grid if ((oracle_common_is_grid_layout | string | lower) in ['true', 'yes', 'on', '1', 'y'])
+     else oracle_common_patch_owner_oracle) }}

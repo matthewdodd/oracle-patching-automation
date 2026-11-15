@@ -1,0 +1,18 @@
+---
+# Generic Linux (ansible_facts['system'] == 'Linux'). Loaded first for every Linux host; the os_family,
+# distribution and release files (RedHat.yml, RedHat-9.yml, ...) loaded after it override these values.
+# Prefix of the patch bundle file name (<prefix>_<cycle><year>.tar.gz; the original LINUX_jan<YY>.tar.gz).
+__oracle_common_artifact_platform: LINUX
+# Package check: installed packages are read with package_facts (manager below). An empty manager and an
+# empty query command skip reading them. No package list unless a more specific file defines one: the
+# original playbook checked RHEL only.
+__oracle_common_package_manager: ""
+__oracle_common_package_query_command: []
+__oracle_common_package_query_regex: ""
+__oracle_common_prereq_packages: []
+# Group membership (initialization_role tasks/group_membership.yml), as argument vectors. Add: <command...> <member>
+# <group> (the original command). Members: <command...> <group> through NSS (local files, LDAP, SSSD); the regex
+# captures the comma-separated member field of "name:x:gid:a,b,c".
+__oracle_common_group_add_command: [/bin/gpasswd, --add]
+__oracle_common_group_members_command: [/usr/bin/getent, group]
+__oracle_common_group_members_regex: '\A[^:]*:[^:]*:[^:]*:(.*)\Z'

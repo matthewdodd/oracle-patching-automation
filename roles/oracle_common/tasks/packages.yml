@@ -1,0 +1,54 @@
+---
+# Checks that the prerequisite packages (AIX: filesets) of the OS release are installed (the original checked a
+# fixed EL7 list on RHEL only). The list comes from the OS variable files (tasks/os_vars.yml): RedHat-8/9/10.yml
+# for the whole Red Hat family; Linux.yml, RedHat.yml (other releases) and AIX.yml leave it empty, and the
+# check is then skipped with a message. Package facts are gathered only where an rpm-style package manager is
+# configured (never on AIX); AIX filesets are read with a read-only query command when a list is configured.
+- name: Report a skipped package check
+  ansible.builtin.debug:
+    msg: >-
+      The prerequisite package check is skipped on
+      {{ ansible_facts['distribution'] | default(ansible_facts['system'] | default('this host')) }}
+      {{ ansible_facts['distribution_version'] | default('') }}:
+      {{ 'oracle_common_check_packages is false' if not (oracle_common_check_packages | bool)
+         else 'no package list for this OS release (set oracle_common_prereq_packages to enable it)' }}.
+  when: not (oracle_common_check_packages | bool) or (oracle_common_prereq_packages | length == 0)
+
+- name: Check the installed packages
+  when:
+    - oracle_common_check_packages | bool
+    - oracle_common_prereq_packages | length > 0
+  block:
+    - name: Check how the installed packages can be read
+      ansible.builtin.assert:
+        that: >-
+          (oracle_common_package_manager | string | length > 0) or (oracle_common_package_query_command | length > 0)
+        fail_msg: >-
+          oracle_common_prereq_packages is set, but neither oracle_common_package_manager nor
+          oracle_common_package_query_command is configured for this OS, so the packages cannot be checked
+        quiet: true
+
+    - name: Gather the package facts
+      ansible.builtin.package_facts:
+        manager: "{{ oracle_common_package_manager }}"
+      when: oracle_common_package_manager | string | length > 0
+
+    - name: List the installed packages (read-only query)
+      ansible.builtin.command:
+        argv: "{{ oracle_common_package_query_command }}"
+      register: __oracle_common_package_query
+      changed_when: false
+      when: oracle_common_package_manager | string | length == 0
+
+    - name: Check whether the prerequisite packages are installed
+      ansible.builtin.assert:
+        that: __oracle_common_missing_packages | length == 0
+        fail_msg: "Missing package; FAIL DUE TO THESE PACKAGES NOT BEING FOUND: {{ __oracle_common_missing_packages }}"
+        success_msg: "All {{ oracle_common_prereq_packages | length }} prerequisite packages are installed"
+      vars:
+        __oracle_common_installed: >-
+          {{ (ansible_facts['packages'] | default({})).keys() | list
+             if (oracle_common_package_manager | string | length > 0)
+             else (__oracle_common_package_query.stdout | default('')
+                   | regex_findall(oracle_common_package_query_regex) | list) }}
+        __oracle_common_missing_packages: "{{ oracle_common_prereq_packages | reject('in', __oracle_common_installed) | list }}"

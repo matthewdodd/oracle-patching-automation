@@ -1,0 +1,13 @@
+---
+# Install with:
+#   ansible-galaxy collection install -r collections/requirements.yml -p collections
+# (or into any path on ANSIBLE_COLLECTIONS_PATH). Only collections the code uses, pinned exactly.
+# The Teams notification uses ansible.builtin.uri (no collection); community.general (office_365_connector_card)
+# and the deprecated servicenow.servicenow (snow_record_find) are no longer needed.
+collections:
+  # ansible.cfg: callbacks_enabled = ansible.posix.profile_tasks (per-task timing output).
+  - name: ansible.posix
+    version: "2.2.2"
+  # ServiceNow change check: servicenow.itsm.change_request_info (roles/oracle_common/tasks/change_ticket_check.yml).
+  - name: servicenow.itsm
+    version: "2.17.0"

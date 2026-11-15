@@ -1,52 +1,58 @@
 ---
-- set_fact:
-    memberlist="{{ item }}"
-    groupname="{{GROUP_NAME}}"
-    action="add"
+# Adds one member (include variable __initialization_role_member) to oracle_common_group_name, with the original
+# commands (gpasswd on Linux, chgrpmem on AIX; oracle_common_group_add_command from roles/oracle_common/vars/<OS>.yml),
+# but:
+#   - the membership is checked exactly: the per-OS lookup (getent group / lsgroup, oracle_common_group_members_command)
+#     is split on commas and compared member by member (the original grep matched substrings: oracle matched oracle2,
+#     and a group name matched inside another group's line);
+#   - the change runs through Ansible become (oracle_common_group_membership_become_user, default root; the become
+#     method comes from the inventory) instead of a raw sudo inside a shell, and every value is a separate argument
+#     (no shell, so a member or group name can never run a command);
+#   - nothing runs when the member is already in the group (idempotent; check mode reports what would change).
+# ansible.builtin.user is not used on purpose: for an account that lives in LDAP/IdM it could create a conflicting
+# local user. Only when oracle_common_manage_group_membership is true (the default, as before; tasks/main.yml).
+# The original OS check (uname), without a shell.
+- name: Read the OS type ({{ __initialization_role_member }})
+  ansible.builtin.command:
+    argv: [uname]
+  register: __initialization_role_uname
+  changed_when: false
+  check_mode: false
 
-- name: Check if OS type is allowed
-  shell:
-  args:
-    executable: /usr/bin/bash
-    cmd: |
-      ostype=`uname`
-      if [[ $ostype != "AIX" ]] && [[ $ostype != "Linux" ]]
-      then
-        echo "Failed: OS not supported"
-        exit 4
-      else
-        echo "OS = $ostype"
-      fi
-  register: oscheck_result
-  failed_when: oscheck_result.rc == 4
+- name: Check if OS type is allowed ({{ __initialization_role_member }})
+  ansible.builtin.assert:
+    that: (__initialization_role_uname.stdout | trim) in ['AIX', 'Linux']
+    fail_msg: "Failed: OS not supported ({{ __initialization_role_uname.stdout | trim }}); group membership is managed on AIX and Linux"
+    success_msg: "OS = {{ __initialization_role_uname.stdout | trim }}"
 
-- name: Add member to group
-  shell:
-  args:
-    executable: /usr/bin/bash
-    cmd: |
-      membername={{memberlist}}
-      ostype=`uname`
-      grep {{groupname}}: /etc/group | grep $membername
-        
-      if [ $? -eq 0 ]
-      then
-        echo "Member $membername is already in the {{groupname}} group."
-      elif [ $ostype = 'AIX' ]
-      then
-        echo "add $membername" "{{groupname}}"
-        sudo /usr/bin/chgrpmem -m + "$membername" "{{groupname}}"
-      elif [ $ostype = 'Linux' ]
-      then
-        echo "add $membername" "{{groupname}}"
-        sudo /bin/gpasswd --add "$membername" "{{groupname}}"
-      fi
-      if [ $? -ne 0 ]
-      then
-        echo "Error adding $membername to {{groupname}}"
-        exit 1
-      fi
-  register: action_result
+- name: Look up the members of the group {{ oracle_common_group_name }}
+  ansible.builtin.command:
+    argv: "{{ oracle_common_group_members_command + [oracle_common_group_name] }}"
+  register: __initialization_role_group_lookup
+  changed_when: false
+  check_mode: false
+  failed_when: >-
+    __initialization_role_group_lookup.rc != 0 or (__initialization_role_group_lookup.stdout | trim | length == 0)
 
-- debug:
-    msg: "{{action_result.stdout_lines}}"
+- name: Parse the members of the group {{ oracle_common_group_name }}
+  ansible.builtin.set_fact:
+    __initialization_role_group_members: >-
+      {{ ((__initialization_role_group_lookup.stdout | trim | regex_search(oracle_common_group_members_regex, '\1')) or [''])
+         | first | split(',') | map('trim') | reject('equalto', '') | list }}
+
+- name: Add the member to the group if missing ({{ __initialization_role_member ~ ' to ' ~ oracle_common_group_name }})
+  ansible.builtin.command:
+    argv: "{{ oracle_common_group_add_command + [__initialization_role_member, oracle_common_group_name] }}"
+  become: true
+  become_user: "{{ oracle_common_group_membership_become_user }}"
+  register: __initialization_role_group_add
+  changed_when: __initialization_role_group_add.rc == 0
+  when: __initialization_role_member not in __initialization_role_group_members
+
+- name: Report the group membership ({{ __initialization_role_member }})
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Member ' ~ __initialization_role_member ~ ' is already in the ' ~ oracle_common_group_name ~ ' group.')
+         if __initialization_role_member in __initialization_role_group_members
+         else (('add ' if __initialization_role_group_add is changed else 'would add (check mode) ')
+               ~ __initialization_role_member ~ ' ' ~ oracle_common_group_name) }}

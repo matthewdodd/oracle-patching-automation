@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Test stub of lsnrctl. A listener runs while STUB_STATE/listener_<name> exists; listener_start_fail_<name> and
+# listener_stop_fail_<name> are failure switches. Calls are logged to lsnrctl.log.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+cmd=${1:-} name=${2:-listener}
+printf '%s %s\n' "$cmd" "$name" >>"$S/lsnrctl.log"
+case $cmd in
+  status) [[ -f $S/listener_$name ]] ;;
+  start)
+    [[ -f $S/listener_start_fail_$name ]] && { echo "TNS-12541: no listener"; exit 1; }
+    : >"$S/listener_$name"
+    echo "The command completed successfully"
+    ;;
+  stop)
+    [[ -f $S/listener_stop_fail_$name ]] && { echo "TNS-12560: protocol adapter error"; exit 1; }
+    rm -f -- "$S/listener_$name"
+    echo "The command completed successfully"
+    ;;
+  *) exit 1 ;;
+esac

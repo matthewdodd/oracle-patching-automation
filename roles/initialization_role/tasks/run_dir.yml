@@ -1,0 +1,93 @@
+---
+# Creates one working directory of this run (include variables __initialization_role_dir, __initialization_role_dir_owner:
+# the become user that creates it, __initialization_role_dir_remove: whether the cleanup removes it, and
+# __initialization_role_dir_fixed: whether it is used like the original fixed names; default: not
+# oracle_common_run.unique), with oracle_common_modes.dir (default 0750) and oracle_common_work_group, and records it in
+# initialization_role_created_paths when this run created it. A generated per-run path that already exists (directory, file or symbolic link) is refused: it
+# belongs to another run or was planted. A fixed or explicitly given directory (init_clean.yml removed it first) is
+# re-used when it still exists, as before, after the same owner and symbolic link check.
+- name: Check whether the directory exists {{ __initialization_role_dir }}
+  ansible.builtin.stat:
+    path: "{{ __initialization_role_dir }}"
+    follow: false
+    get_checksum: false
+  register: __initialization_role_dir_before
+
+- name: Refuse a per-run directory that already exists {{ __initialization_role_dir }}
+  vars:
+    __initialization_role_dir_is_fixed: "{{ __initialization_role_dir_fixed | default(not (oracle_common_run.unique | bool)) }}"
+  ansible.builtin.assert:
+    that: not (__initialization_role_dir_before.stat.exists and not (__initialization_role_dir_is_fixed | bool))
+    fail_msg: >-
+      {{ __initialization_role_dir }} already exists, but this run ({{ oracle_common_run.id }}) has not created it yet:
+      refusing to use a generated per-run directory another run (or someone else) created. Remove it if it is stale, or
+      set a different oracle_common_run_id.
+    quiet: true
+
+# The parent (e.g. oracle_common_staging_base) must not let other users replace the directory: a world-writable parent
+# without the sticky bit is refused; a world-writable parent with it (the original /tmp, only when configured explicitly)
+# is accepted with a warning. A missing parent is created below, by the same user, with the same mode.
+- name: Check the parent directory {{ __initialization_role_dir | dirname }}
+  ansible.builtin.stat:
+    path: "{{ __initialization_role_dir | dirname }}"
+    get_checksum: false
+  register: __initialization_role_dir_parent
+
+- name: Read the permissions of the parent directory {{ __initialization_role_dir | dirname }}
+  ansible.builtin.set_fact:
+    __initialization_role_parent_world_writable: >-
+      {{ (__initialization_role_dir_parent.stat.exists | default(false)) and (__initialization_role_dir_parent.stat.woth | default(false)) }}
+    __initialization_role_parent_sticky: >-
+      {{ (__initialization_role_dir_parent.stat.exists | default(false))
+         and (((__initialization_role_dir_parent.stat.mode | default('0')) | int(base=8)) // 512) % 2 == 1 }}
+
+- name: Refuse a world-writable parent directory without the sticky bit {{ __initialization_role_dir | dirname }}
+  ansible.builtin.assert:
+    that: not (__initialization_role_parent_world_writable and not __initialization_role_parent_sticky)
+    fail_msg: >-
+      {{ __initialization_role_dir | dirname }} (parent of {{ __initialization_role_dir }}) is world-writable without the
+      sticky bit (mode {{ __initialization_role_dir_parent.stat.mode | default('n/a') }}): any local user could replace the working
+      directory. Choose another oracle_common_staging_base (or remote_script_directory / remote_output_directory).
+    quiet: true
+
+- name: Warn about a world-writable parent directory {{ __initialization_role_dir | dirname }}
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ __initialization_role_dir | dirname }} (parent of {{ __initialization_role_dir }}) is world-writable
+      (sticky bit set, like /tmp). The directory is still created with mode {{ oracle_common_modes.dir }} and checked,
+      but a dedicated base directory (oracle_common_staging_base, default under the Oracle base) is safer.
+  when: __initialization_role_parent_world_writable
+
+- name: Create the directory {{ __initialization_role_dir }}
+  ansible.builtin.file:
+    path: "{{ __initialization_role_dir }}"
+    state: directory
+    mode: "{{ oracle_common_modes.dir }}"
+    group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
+
+- name: Check the directory {{ __initialization_role_dir }}
+  ansible.builtin.stat:
+    path: "{{ __initialization_role_dir }}"
+    follow: false
+    get_checksum: false
+  register: __initialization_role_dir_after
+
+- name: Verify the directory is a real directory owned by this run's user {{ __initialization_role_dir }}
+  ansible.builtin.assert:
+    that:
+      - __initialization_role_dir_after.stat.isdir | default(false)
+      - not (__initialization_role_dir_after.stat.islnk | default(false))
+      - __initialization_role_dir_after.stat.pw_name | default('') == __initialization_role_dir_owner
+    fail_msg: >-
+      {{ __initialization_role_dir }} is not a directory owned by {{ __initialization_role_dir_owner }}
+      (owner {{ __initialization_role_dir_after.stat.pw_name | default('unknown') }}, symbolic link:
+      {{ __initialization_role_dir_after.stat.islnk | default('unknown') }}); refusing to use it
+    quiet: true
+
+- name: Record the directory created by this run {{ __initialization_role_dir }}
+  ansible.builtin.set_fact:
+    initialization_role_created_paths: >-
+      {{ initialization_role_created_paths | default([])
+         + [{'path': __initialization_role_dir, 'owner': __initialization_role_dir_after.stat.pw_name,
+             'remove': __initialization_role_dir_remove | bool}] }}
+  when: not __initialization_role_dir_before.stat.exists

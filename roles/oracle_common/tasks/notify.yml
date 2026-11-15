@@ -1,0 +1,35 @@
+---
+# Sends the Teams notification for the job state in `call` on the card in `summary_state` (patching | prereq).
+# Entry point used by notification.yml (playbook directory):
+#   - ansible.builtin.include_role: {name: oracle_common, tasks_from: notify}
+# Best effort: skipped with a message when notifications are off, the webhook URL is unset, still the
+# "<CHANGE_ME>" placeholder or not https, or summary_state is unknown; a failure to send is a WARNING and never
+# fails the run. The webhook URL is a secret and is never printed.
+- name: Build the notification card
+  ansible.builtin.import_tasks: notify_payload.yml
+
+- name: Decide whether the notification is sent
+  ansible.builtin.set_fact:
+    __oracle_common_notify_skip_reason: >-
+      {{ 'notifications are turned off (oracle_common_notify_enabled)'
+           if not ((oracle_common_notify_enabled | string | lower) in __oracle_common_true_strings)
+         else __oracle_common_notify_skip_reason if __oracle_common_notify_skip_reason | length > 0
+         else 'no Teams webhook URL is configured (set vault_teams_webhook_url in the Ansible Vault)'
+           if __oracle_common_notify_url | length == 0
+         else 'the Teams webhook URL is still the placeholder value of vault.yml.example (set vault_teams_webhook_url)'
+           if __oracle_common_notify_url is search(__oracle_common_placeholder | regex_escape)
+         else 'the Teams webhook URL is not a valid https URL (value hidden)'
+           if __oracle_common_notify_url is not match(__oracle_common_re_https_url)
+         else '' }}
+  vars:
+    __oracle_common_notify_url: "{{ oracle_common_notify_webhook_url | default('', true) | string }}"
+  no_log: true
+
+- name: Report the skipped notification
+  ansible.builtin.debug:
+    msg: "Teams notification '{{ call | default('') }}' not sent: {{ __oracle_common_notify_skip_reason }}"
+  when: __oracle_common_notify_skip_reason | length > 0
+
+- name: Send the notification card
+  ansible.builtin.include_tasks: notify_send.yml
+  when: __oracle_common_notify_skip_reason | length == 0

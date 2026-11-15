@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Test stub of df: reports the mount point when it is listed in STUB_STATE/mounts, else the root file system.
+set -u
+S=${STUB_STATE:?STUB_STATE is not set}
+mp=${!#}
+printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\n'
+if [[ -f $S/mounts ]] && grep -q -x -F -e "$mp" "$S/mounts"; then
+  printf '/dev/stub 100 1 99 1%% %s\n' "$mp"
+else
+  printf '/dev/root 100 1 99 1%% /\n'
+fi

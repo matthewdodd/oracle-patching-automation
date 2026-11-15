@@ -1,0 +1,149 @@
+---
+# End-to-end test of oracle_database_patch.yml on AlmaLinux 9 with stub Oracle software (plan finding U6-01). Nothing here
+# is Oracle software and no real host is touched.
+#
+#   el9-db  one database in scope (moldb: a CDB with a PDB and Java components) on dbhome_1, next to another database
+#           (otherdb) running from its own home (dbhome_2), which the run must leave alone
+#
+# prepare.yml (../shared) installs the role's prerequisite package list for the release, creates the OS users and groups,
+# builds a throw-away CA (trusted through the system trust store), the stub patch bundle and its sha256 file, serves
+# them over https inside the container, creates the fake homes (stub sqlplus, lsnrctl, opatch, datapatch) and starts the
+# databases and listeners. converge.yml runs the unmodified playbook with the canonical input names (oracle_common_*).
+# verify.yml checks the result, then runs the playbook twice more: unchanged (the patch is already applied: skipped
+# without stopping anything) and with a wrong checksum (refused at the download, nothing stopped, the failure report
+# names the state left behind).
+#
+# Run from the repository root:
+#   pip install -r requirements-test.txt
+#   molecule test                       # full sequence (this scenario)
+#   molecule test --all                 # every scenario
+#   molecule converge && molecule verify && molecule destroy
+dependency:
+  # Installs collections.yml from this directory (community.docker for the driver, ansible.posix for its create
+  # playbook, servicenow.itsm for the playbook's change check). Nothing else installs them: the CI workflow only installs
+  # requirements-test.txt. A shell step and not the galaxy one, because the galaxy dependency always runs a roles install
+  # as well and reports it as missing when there is no roles requirements.yml (the scenarios need no roles).
+  name: shell
+  command: ansible-galaxy collection install --requirements-file "${MOLECULE_SCENARIO_DIRECTORY}/collections.yml"
+
+driver:
+  name: docker
+
+platforms:
+  - name: el9-db
+    image: docker.io/library/almalinux:9.6
+    pre_build_image: false
+    dockerfile: ../shared/Dockerfile.j2
+    groups: [molecule_oracle]
+
+ansible:
+  cfg:
+    defaults:
+      # The repository's roles (Molecule writes its own ansible.cfg, so the repository ansible.cfg is not read).
+      roles_path: ${MOLECULE_PROJECT_DIRECTORY}/roles
+      stdout_callback: ansible.builtin.default
+      callback_result_format: yaml
+  playbooks:
+    # Shared by every scenario (paths are relative to this directory).
+    prepare: ../shared/prepare.yml
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      el9-db:
+        ansible_python_interpreter: /usr/bin/python3
+    group_vars:
+      # "all" (not molecule_oracle): the playbook's first plays run on localhost, which reads only the all group,
+      # exactly as AAP survey answers and the inventory's group_vars/all reach every play.
+      all:
+        # --- Job inputs (the AAP survey names; target is set by converge.yml) ------------------------------------
+        DATABASE_NAME: moldb
+        TICKET_NUMBER: CHG0012345
+        # The change check is skipped (no ServiceNow in the test); a real boolean.
+        override_chg: true
+        sid_server_dict:
+          moldb:
+            dbowner: oracle
+            pdb: MOLPDB
+            # No VIP on a single-instance host: the ping check is skipped.
+            dbvip: ""
+            dbListener: LISTENER_MOLDB
+            pdbListener: LISTENER_MOLPDB
+
+        # --- Environment inputs (canonical oracle_common_* names; real values live in inventory/<env>/) ----------
+        oracle_common_group_name: "{{ molecule_automation_group }}"
+        # Base URL; the release folder of the detected version (19.0.0) is appended (oracle_common_patch_repo_version_subdir).
+        oracle_common_patch_repo_url: "https://{{ molecule_repository.address }}:{{ molecule_repository.port }}/oracledatabase"
+        # Bundle LINUX_apr26.tar.gz (<platform>_<cycle><year>.tar.gz).
+        oracle_common_patch_cycle: apr
+        oracle_common_patch_year: "26"
+        # Required checksum, <algorithm>:<https URL of a checksum file>, published next to the bundle.
+        oracle_common_patch_checksum: "sha256:{{ molecule_repository_release_url }}/{{ molecule_bundle_file }}.sha256"
+        # Shorter polling of the asynchronous patch step than the production default (120 s); the stubs are instant.
+        oracle_common_patch_poll_delay: 5
+        # No Teams webhook: every notification is skipped with a message (best effort, never fatal).
+
+        # --- Test fixture (molecule_*; used by ../shared/prepare.yml and the verify tasks only) ------------------
+        molecule_oracle_base: /u01/oracle
+        molecule_env_dir: /local
+        molecule_automation_group: oraauto
+        molecule_repository:
+          address: 127.0.0.1
+          port: 8443
+          dir: /srv/oracle-artifacts
+          tls_dir: /etc/molecule-repository
+          access_log: /var/log/molecule-repository.log
+          release: "19.0.0"
+        molecule_repository_release_url: "https://{{ molecule_repository.address }}:{{ molecule_repository.port }}/oracledatabase/19.0.0"
+        molecule_bundle_file: LINUX_apr26.tar.gz
+        molecule_patch:
+          ru_id: "99100001"
+          ojvm_id: "99100002"
+          old_opatch_version: 12.2.0.1.40
+          new_opatch_version: 12.2.0.1.47
+        molecule_db_version: 19.0.0.0.0
+        molecule_db_version_full: 19.27.0.0.0
+        molecule_homes:
+          - /u01/oracle/product/19.0.0/dbhome_1
+          - /u01/oracle/product/19.0.0/dbhome_2
+        # patched: what verify.yml expects after converge.
+        molecule_databases:
+          - sid: moldb
+            home: /u01/oracle/product/19.0.0/dbhome_1
+            pdbs: [MOLPDB]
+            java: true
+            listeners: [LISTENER_MOLDB, LISTENER_MOLPDB]
+            # datapatch leaves 3 new invalid objects: database_patch.bash runs utlrp after it.
+            invalid_delta: 3
+            patched: true
+          - sid: otherdb
+            home: /u01/oracle/product/19.0.0/dbhome_2
+            pdbs: []
+            java: false
+            listeners: [LISTENER_OTHERDB]
+            patched: false
+        molecule_expected_homes:
+          - {path: /u01/oracle/product/19.0.0/dbhome_1, patched: true, ojvm: true}
+          - {path: /u01/oracle/product/19.0.0/dbhome_2, patched: false, ojvm: false}
+
+verifier:
+  name: ansible
+
+scenario:
+  name: default
+  # Molecule's built-in idempotence step is replaced by verify.yml's own re-run: a second run with the patch already
+  # applied must succeed without stopping or changing anything, but it creates its own per-run working directory
+  # (oracle_common_unique_work_dirs), so it never reports changed=0. verify.yml checks the outcome instead (the run is
+  # skipped as "unneeded", the processes, patches and OPatch directories are unchanged).
+  # There is no cleanup step (no cleanup playbook): the scenario changes nothing outside its container, so destroy
+  # removes everything it created.
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

@@ -1,0 +1,193 @@
+---
+# Inputs of standalone_control_role (included by oracle_control_sid.yml). The working directories and the
+# script mode come from oracle_common and initialization_role, which run earlier in the same play.
+argument_specs:
+  main:
+    short_description: Start or stop a standalone database, its listener and PDB listener.
+    description:
+      - Both actions first check the database VIP (skipped when dbvip is empty) and copy every control script into
+        remote_script_directory once (tasks/copy_scripts.yml), so a startup does not depend on an earlier shutdown.
+      - startup - rename the alert log (a log that cannot be rotated is a WARNING unless
+        standalone_control_role_fail_on_rename_logs_error), start the database (and open PDBs), check the alert log,
+        start the listener, check the listener logs (log check findings are WARNINGs unless the
+        standalone_control_role_fail_on_*_log_errors toggles are true), start the PDB listener (when the database's
+        sid_server_dict entry has a pdb).
+      - shutdown - stop the PDB listener (when pdb is set), the listener and the database, then verify the database
+        is down (no ora_pmon_<SID> process). A failed shutdown, a database still running, or a listener that cannot
+        be stopped (exit code other than 0 or 4 = already stopped) fails the role.
+      - oracle_control_sid.yml runs the role once per database in scope (oracle_common_run.scope).
+      - Script file names are role defaults (standalone_control_role_*_script); the original names
+        (check_alertLog_script, rename_logs_script, start_database_script, ...) are still accepted as aliases.
+      - Records the state of each database it starts or stops in oracle_common_progress.databases (starting, started,
+        stopping, stopped; roles/oracle_common tasks/progress.yml), which the failure report of the playbooks shows.
+    options:
+      control_command:
+        type: str
+        required: true
+        choices: [startup, shutdown]
+        description: Action to run (set from control by oracle_control_sid.yml).
+      ORACLE_SID:
+        type: str
+        required: true
+        description: ORACLE_SID (lower-cased by oracle_control_sid.yml); key into sid_server_dict.
+      server_name:
+        type: str
+        required: true
+        description: Host the control scripts run on (delegate_to).
+      sid_server_dict:
+        type: dict
+        required: true
+        description: Inventory dictionary of databases keyed by ORACLE_SID (dbowner, pdb, dbvip, dbListener, pdbListener).
+      standalone_control_role_time_to_pause:
+        type: raw
+        description: Accepted but unused (as in the original). Alias timeToPause. Default 120.
+      timeToPause:
+        type: raw
+        description: Original name of standalone_control_role_time_to_pause, still accepted.
+      remote_output_directory:
+        type: str
+        description: Working (log) directory of this database (set per database by oracle_control_sid.yml).
+      standalone_control_role_sid:
+        type: str
+        description: >-
+          ORACLE_SID as given in the patch scope (set by oracle_control_sid.yml). The sid_server_dict entry is
+          sid_server_dict[ORACLE_SID] as before, else sid_server_dict[standalone_control_role_sid], else the one key that
+          matches without case. Default empty.
+      standalone_control_role_environment:
+        type: dict
+        description: >-
+          Environment of the control scripts (oracle_control_sid.yml passes ORA_ENV_FILE in a patch run, the environment
+          file the shared ORACLE_HOME check validated, and ORA_ENV_FILE_ALLOW_ANY_OWNER=true with
+          oracle_common_env_file_allow_any_owner). Default empty (the scripts use /local/<ORACLE_SID>.env).
+      standalone_control_role_shutdown_verify_retries:
+        type: raw
+        description: >-
+          How many times the process list is checked for ora_pmon_<SID> after a shutdown (alias
+          oracle_patch_shutdown_verify_retries). Default 12.
+      standalone_control_role_shutdown_verify_delay:
+        type: raw
+        description: Seconds between two checks (alias oracle_patch_shutdown_verify_delay). Default 10.
+      standalone_control_role_check_mount_script:
+        type: str
+        description: >-
+          Accepted, not run by this role (as before). Script in roles/standalone_control_role/files/. Alias check_mount_script.
+          Default check_mount.bash
+      check_mount_script:
+        type: str
+        description: Original name of standalone_control_role_check_mount_script, still accepted.
+      standalone_control_role_check_timestamp_script:
+        type: str
+        description: >-
+          Accepted, not run by this role (as before). Script in roles/standalone_control_role/files/. Alias check_timestamp_script.
+          Default check_timestamp.bash
+      check_timestamp_script:
+        type: str
+        description: Original name of standalone_control_role_check_timestamp_script, still accepted.
+      standalone_control_role_check_alert_log_script:
+        type: str
+        description: >-
+          Alert log check (startup). Script in roles/standalone_control_role/files/. Alias check_alertLog_script.
+          Default check_alert_log.bash
+      check_alertLog_script:
+        type: str
+        description: Original name of standalone_control_role_check_alert_log_script, still accepted.
+      standalone_control_role_check_listener_logs_script:
+        type: str
+        description: >-
+          Listener log check (startup). Script in roles/standalone_control_role/files/. Alias check_listenerLogs_script.
+          Default check_listener_logs.bash
+      check_listenerLogs_script:
+        type: str
+        description: Original name of standalone_control_role_check_listener_logs_script, still accepted.
+      standalone_control_role_rename_logs_script:
+        type: str
+        description: >-
+          Alert log rotation (startup). Script in roles/standalone_control_role/files/. Alias rename_logs_script.
+          Default rename_logs.bash
+      rename_logs_script:
+        type: str
+        description: Original name of standalone_control_role_rename_logs_script, still accepted.
+      standalone_control_role_start_database_script:
+        type: str
+        description: >-
+          Database start (startup). Script in roles/standalone_control_role/files/. Alias start_database_script.
+          Default database_ctl.bash
+      start_database_script:
+        type: str
+        description: Original name of standalone_control_role_start_database_script, still accepted.
+      standalone_control_role_start_listener_script:
+        type: str
+        description: >-
+          Listener and PDB listener start (startup). Script in roles/standalone_control_role/files/. Alias start_listener_script.
+          Default listener_ctl.bash
+      start_listener_script:
+        type: str
+        description: Original name of standalone_control_role_start_listener_script, still accepted.
+      standalone_control_role_start_pdb_script:
+        type: str
+        description: >-
+          Accepted, not run by this role (as before). Script in roles/standalone_control_role/files/. Alias start_pdb_script.
+          Default pdb_ctl.bash
+      start_pdb_script:
+        type: str
+        description: Original name of standalone_control_role_start_pdb_script, still accepted.
+      standalone_control_role_start_pdb_listener_script:
+        type: str
+        description: >-
+          Accepted, not run by this role (the PDB listener is started with the listener script, as before). Alias
+          start_pdbListener_script. Default listener_ctl.bash
+      start_pdbListener_script:
+        type: str
+        description: Original name of standalone_control_role_start_pdb_listener_script, still accepted.
+      standalone_control_role_stop_pdb_script:
+        type: str
+        description: >-
+          Accepted, not run by this role (as before). Script in roles/standalone_control_role/files/. Alias stop_pdb_script.
+          Default pdb_ctl.bash
+      stop_pdb_script:
+        type: str
+        description: Original name of standalone_control_role_stop_pdb_script, still accepted.
+      standalone_control_role_stop_pdb_listener_script:
+        type: str
+        description: >-
+          PDB listener stop (shutdown). Script in roles/standalone_control_role/files/. Alias stop_pdbListener_script.
+          Default listener_ctl.bash
+      stop_pdbListener_script:
+        type: str
+        description: Original name of standalone_control_role_stop_pdb_listener_script, still accepted.
+      standalone_control_role_stop_database_script:
+        type: str
+        description: >-
+          Database stop (shutdown). Script in roles/standalone_control_role/files/. Alias stop_database_script.
+          Default database_ctl.bash
+      stop_database_script:
+        type: str
+        description: Original name of standalone_control_role_stop_database_script, still accepted.
+      standalone_control_role_stop_listener_script:
+        type: str
+        description: >-
+          Listener stop (shutdown). Script in roles/standalone_control_role/files/. Alias stop_listener_script.
+          Default listener_ctl.bash
+      stop_listener_script:
+        type: str
+        description: Original name of standalone_control_role_stop_listener_script, still accepted.
+      standalone_control_role_alert_log_check_log:
+        type: str
+        description: >-
+          Log file prefix of the alert log check in remote_output_directory (<prefix>.<YYYY.MM.DD>). Default
+          log.<standalone_control_role_check_alert_log_script>; "log.check_mount.bash" keeps the original file name.
+      standalone_control_role_fail_on_alert_log_errors:
+        type: bool
+        description: >-
+          true fails the startup when the alert log has ORA- errors or the check cannot run. Default false (a WARNING,
+          as before).
+      standalone_control_role_fail_on_listener_log_errors:
+        type: bool
+        description: >-
+          true fails the startup when the listener log check finds errors or a missing log (exit code 4). Default false
+          (a WARNING, as before).
+      standalone_control_role_fail_on_rename_logs_error:
+        type: bool
+        description: >-
+          true fails the startup, before the database is started, when the alert log cannot be rotated (rename_logs exit
+          code 4; the original behaviour). Default false (a WARNING; the database is started).

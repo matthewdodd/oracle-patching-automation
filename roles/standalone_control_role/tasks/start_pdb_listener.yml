@@ -1,29 +1,26 @@
 ---
-##This script starts the PDB listener
+## Starts the PDB listener with the listener control script (copied by copy_scripts.yml). Logged as before
+## (<remote_output_directory>/log.start_PDB_listener.<YYYY.MM.DD>); the script and its arguments are positional
+## parameters of a static bash script (no shell interpolation).
 
-- name: copy listener start script to {{ server_name }}
-  copy:
-    src: "{{ start_listener_script }}"
-    dest: "{{ remote_script_directory }}/{{ start_listener_script }}"
-    mode: "{{script_permission}}"
-    force: yes
+- name: Start PDB listener {{ ORACLE_SID ~ ' on ' ~ server_name }}
+  ansible.builtin.command:
+    argv: >-
+      {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'start_pdb_listener',
+          remote_output_directory ~ '/log.start_PDB_listener',
+          remote_script_directory ~ '/' ~ standalone_control_role_start_listener_script, 'start', ORACLE_SID]
+         + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_pdb_listener_start_status
+  changed_when: standalone_control_role_pdb_listener_start_status.rc == 0
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
+  failed_when: standalone_control_role_pdb_listener_start_status.rc not in [0, 4]
 
-- name: start listener {{ ORACLE_SID }} on {{ server_name }}
-  shell: >
-    {{ remote_script_directory }}/{{ start_listener_script }} start
-    {{ ORACLE_SID }} {{ sid_server_dict[ORACLE_SID].pdbListener }}
-    &> >(tee {{ remote_output_directory }}/log.start_PDB_listener.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
-  delegate_to: "{{ server_name }}"
-  register: listener_start_status
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
-  failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0
-
-- name: print start_listener_script status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ listener_start_status.stdout_lines }}"
-  failed_when: listener_start_status.rc == 4
+- name: Print start_pdb_listener status for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_pdb_listener_start_status.stdout_lines }}"
+  failed_when: standalone_control_role_pdb_listener_start_status.rc == 4

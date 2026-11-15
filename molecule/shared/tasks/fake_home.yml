@@ -1,0 +1,61 @@
+---
+# TEST FIXTURE (prepare.yml): one fake ORACLE_HOME (include variable molecule_home, a path), owned by oracle:oinstall:
+#   bin/oracle, bin/tnslsnr    copies of bash: the stubs run the instance and listener processes from them, so
+#                              /proc/<pid>/exe names a file of this home (home_inventory.bash, the opatch stub)
+#   bin/sqlplus, bin/lsnrctl   stubs (files/stubs/)
+#   OPatch/opatch, datapatch   stubs, with version.txt = molecule_patch.old_opatch_version (the bundle's is newer)
+# Nothing in it is Oracle software.
+- name: Create the fake Oracle home directories {{ molecule_home }}
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: "0755"
+  loop:
+    - "{{ molecule_home | dirname | dirname }}"
+    - "{{ molecule_home | dirname }}"
+    - "{{ molecule_home }}"
+    - "{{ molecule_home }}/bin"
+    - "{{ molecule_home }}/OPatch"
+    - "{{ molecule_home }}/install"
+    - "{{ molecule_home }}/rdbms/admin"
+    - "{{ molecule_home }}/network/admin"
+
+- name: Install the Oracle tool stubs {{ molecule_home }}
+  ansible.builtin.copy:
+    src: "{{ molecule_shared_dir }}/files/stubs/{{ item.stub }}"
+    dest: "{{ molecule_home }}/{{ item.dest }}"
+    owner: oracle
+    group: oinstall
+    mode: "0755"
+  loop:
+    - {stub: sqlplus, dest: bin/sqlplus}
+    - {stub: lsnrctl, dest: bin/lsnrctl}
+    - {stub: opatch, dest: OPatch/opatch}
+    - {stub: datapatch, dest: OPatch/datapatch}
+
+- name: Install the instance and listener executables (copies of bash) {{ molecule_home }}
+  ansible.builtin.copy:
+    src: /usr/bin/bash
+    remote_src: true
+    dest: "{{ molecule_home }}/bin/{{ item }}"
+    owner: oracle
+    group: oinstall
+    mode: "0755"
+  loop: [oracle, tnslsnr]
+
+- name: Write the fake home files {{ molecule_home }}
+  ansible.builtin.copy:
+    dest: "{{ molecule_home }}/{{ item.path }}"
+    content: "{{ item.content }}"
+    owner: oracle
+    group: oinstall
+    mode: "0644"
+    force: false
+  loop:
+    - {path: OPatch/version.txt, content: "OPATCH_VERSION:{{ molecule_patch.old_opatch_version }}\n"}
+    - {path: rdbms/admin/utlrp.sql, content: "-- test stub: the sqlplus stub handles @?/rdbms/admin/utlrp.sql itself\n"}
+    - {path: README.molecule, content: "TEST STUB Oracle home built by molecule/shared/tasks/fake_home.yml - not Oracle software.\n"}
+  loop_control:
+    label: "{{ item.path }}"

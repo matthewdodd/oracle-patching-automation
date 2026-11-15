@@ -1,189 +1,300 @@
 ---
+# Full patch run. Every stage that can fail has a rescue that ends the same way (roles/oracle_common
+# tasks/failure_report.yml): the failure notification (best effort, never fatal), then a failure naming the stage, the
+# failed task and its error, and the state left behind - which databases this run stopped, whether the Oracle home was
+# patched, where datapatch ran, and which files were kept or removed. A rescue that cleans up first records the failure
+# before the cleanup (tasks/failure_record.yml), so the cleanup cannot hide the original error.
 - name: Add server names passed in to the Playbook
   hosts: all,localhost
-  gather_facts: no 
+  gather_facts: false
   run_once: true
-  tasks: 
-    - name: Add server names to the Ansible inventory 
-      when: target is defined 
-      add_host: 
-        name: '{{ item }}' 
-        groups: '{{ ansible_inventory_groups|default(omit) }}' 
-      with_items: 
-        - "{{ target.replace(',','\n').split() }}" 
-      changed_when: false 
+  tasks:
+    - name: Check that target was supplied
+      ansible.builtin.assert:
+        that:
+          - target is defined
+          - target | string | trim | length > 0
+        fail_msg: >-
+          target is required: pass the comma or space separated host list, e.g. -e target=dbhost01.example.com
+          (AAP: the 'target' survey question / extra var).
+        quiet: true
+      any_errors_fatal: true
+
+    - name: Add server names to the Ansible inventory
+      when: target is defined
+      ansible.builtin.add_host:
+        name: '{{ item }}'
+        groups: '{{ ansible_inventory_groups | default(omit) }}'
+      loop: "{{ target.replace(',', '\n').split() }}"
+      changed_when: false
 
 - name: Full Database Patching Playbook - Pre-Tasks
   hosts: localhost
-  gather_facts: no
-  pre_tasks: 
+  gather_facts: false
+  pre_tasks:
+    # Validate the job inputs (target, DATABASE_NAME, TICKET_NUMBER, override_chg, sid_server_dict entries) and the patch
+    # scope (oracle_patch_databases) before anything else runs: anchored patterns, "<CHANGE_ME>" placeholders rejected
+    # (roles/oracle_common).
+    - name: Validate the job inputs
+      block:
+        - name: Validate the job inputs
+          ansible.builtin.import_role:
+            name: oracle_common
+            tasks_from: validate_job
+        - name: Validate the patch scope and the safety settings
+          ansible.builtin.import_role:
+            name: oracle_common
+            tasks_from: preflight_scope
+      rescue:
+        - name: Report the failure (Validate the job inputs)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Validate the job inputs
+
     - name: Send Starting Notification
-      include_tasks: notification.yml
+      ansible.builtin.include_tasks: notification.yml
       vars:
-        - call: "start"
-        - summary_state: "patching"
+        call: "start"
+        summary_state: "patching"
 
     - name: Validate Inventory
       block:
         - name: Validate that the Database is in the Inventory Dictionary
-          debug:
+          ansible.builtin.debug:
             msg: "{{ item }}"
-          with_items:
-            - "{{sid_server_dict[DATABASE_NAME]}}"
+          loop:
+            - "{{ sid_server_dict[DATABASE_NAME] }}"
       rescue:
-        - name: Send Notification
-          include_tasks: notification.yml
+        - name: Report the failure (Validate Inventory)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
           vars:
-            - call: "fail"
-            - summary_state: "patching"
-        - name: Check if Fail
-          fail: 
-            msg: "Fail"
+            oracle_common_failure_stage: Validate Inventory
 
+    # oracle_chg_ticket.yml decides itself: it skips the check when override_chg (or oracle_common_override_chg) is true,
+    # a boolean or the legacy strings "true" / "false". The original included it only when override_chg was the string
+    # "false", so a boolean false skipped the check and an undefined override_chg failed the run.
     - name: Validate Change Ticket
       block:
         - name: Change Ticket Validation
-          include_tasks: oracle_chg_ticket.yml
+          ansible.builtin.include_tasks: oracle_chg_ticket.yml
       rescue:
-        - name: Checking Change Ticket Validation
-          include_tasks: notification.yml
+        - name: Report the failure (Validate Change Ticket)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
           vars:
-            - call: "fail"
-            - summary_state: "patching"
-        - name: Check if Fail
-          fail: 
-            msg: "Fail"
-      when:
-        - override_chg == "false"
+            oracle_common_failure_stage: Validate Change Ticket
 
 - name: Full Database Patching Playbook - Tasks
-  hosts: "{{ target }}"
+  # The default only keeps the play parseable when target is missing; play 1 fails first with a clear message.
+  hosts: "{{ target | default('') }}"
+  # Facts are gathered by oracle_common after a Python-free check of the OS release: gathering them here would
+  # fail on EL7 / Amazon Linux 2 (no Python 3.9+ for ansible-core 2.22) before the guard could name the release.
+  gather_facts: false
   tasks:
+    # First, before anything changes on the host: refuse unsupported platforms (EL7, Amazon Linux 2), gather facts,
+    # load the per-OS variables and the supported Oracle versions, and validate every input (roles/oracle_common).
+    - name: Load the common configuration and validate the inputs
+      block:
+        - name: Load the common configuration and validate the inputs
+          ansible.builtin.import_role:
+            name: oracle_common
+      rescue:
+        - name: Report the failure (Load the common configuration)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Load the common configuration
+
+    # Validates the scope on this host, chooses this run's working directories, checks the owner of every running
+    # database in scope, stages the scripts and resolves the patch bundle.
     - name: Initialize
       block:
         - name: Initialize
-          import_role:
+          ansible.builtin.import_role:
             name: initialization_role
       rescue:
-        - name: init
-          delegate_to: 127.0.0.1
-          block:
-          - name: Checking Initialize Playbook
-            include_tasks: notification.yml
-            vars:
-              - call: "fail"
-              - summary_state: "patching"
-          - name: Check if Fail
-            fail: 
-              msg: "Fail"
+        - name: Record the failure (Initialize)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_record
+          vars:
+            oracle_common_failure_stage: Initialize
+        - name: Remove this run's patching files
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: Report the failure and the state left behind (Initialize)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Initialize
+            oracle_common_failure_cleanup_done: true
+
+    # Before anything is stopped or the home is changed: refuse unless every database that uses the ORACLE_HOME is in
+    # scope (oracle_patch_databases), and every database in scope uses that home.
+    - name: Check the databases that use the Oracle home
+      block:
+        - name: Check the databases that use the Oracle home
+          ansible.builtin.import_role:
+            name: oracle_common
+            tasks_from: shared_home
+      rescue:
+        - name: Record the failure (Shared Oracle home check)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_record
+          vars:
+            oracle_common_failure_stage: Shared Oracle home check
+        - name: Remove this run's patching files
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: Report the failure and the state left behind (Shared Oracle home check)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Shared Oracle home check
+            oracle_common_failure_cleanup_done: true
 
     - name: Run Prereq
       block:
         - name: Run Prereq
-          import_role:
+          ansible.builtin.import_role:
             name: oracle_database_patch_role
             tasks_from: run_prereq
       rescue:
-        - name: prereq1
-          block:
-          - set_fact:
-              notification_call: "{{ 'unneeded' if hostvars[item].check_if == 'two' else 'fail' }}"
-            with_items:
-              - "{{ target }}"
-          - name: Remove old patching files
-            include_role:
-              name: oracle_database_patch_role
-              tasks_from: clean_files_from_server
-        - name: prereq2
+        - name: Record the failure (Run Prereq)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_record
+          vars:
+            oracle_common_failure_stage: Run Prereq
+        # "unneeded" only when the patch is already applied in every database in scope (with
+        # oracle_common_fail_when_already_applied); any other failure, including a failed status check, is "fail".
+        - name: Choose the notification
+          ansible.builtin.set_fact:
+            notification_call: >-
+              {{ 'unneeded' if ((oracle_common_patch_status | default({})).outcome | default('')) == 'applied' else 'fail' }}
+        - name: Remove old patching files
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: Report the failure and the state left behind (Run Prereq)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Run Prereq
+            oracle_common_failure_call: "{{ notification_call }}"
+            oracle_common_failure_cleanup_done: true
+
+    # Already applied in every database in scope: nothing is stopped or changed. The run ends successfully for this host
+    # with the "unneeded" notification (oracle_common_fail_when_already_applied: true fails instead, in the rescue above).
+    # This is also what a re-run after a successful run does.
+    - name: Skip a patch that is already applied
+      when: ((oracle_common_patch_status | default({})).outcome | default('')) == 'applied'
+      block:
+        - name: Remove old patching files
+          ansible.builtin.include_role:
+            name: oracle_database_patch_role
+            tasks_from: clean_files_from_server
+        - name: Report the unneeded patch
           delegate_to: 127.0.0.1
           block:
-          - name: Checking Run Prereq
-            include_tasks: notification.yml
-            vars:
-              - call: "{{ notification_call }}"
-              - summary_state: "patching"
-          - name: Check if Fail
-            fail: 
-              msg: "Fail"
+            - name: Send the unneeded notification
+              ansible.builtin.include_tasks: notification.yml
+              vars:
+                call: "unneeded"
+                summary_state: "patching"
+        - name: End the run for this host (the patch is already applied)
+          ansible.builtin.meta: end_host
+          when: ((oracle_common_patch_status | default({})).outcome | default('')) == 'applied'
 
     - name: Shutdown the Oracle Database
       block:
         - name: Shutdown the Oracle Database
-          include_tasks: oracle_control_sid.yml
+          ansible.builtin.include_tasks: oracle_control_sid.yml
           vars:
-            - control: "shutdown"
-            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+            control: "shutdown"
       rescue:
+        - name: Record the failure (Shutdown)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_record
+          vars:
+            oracle_common_failure_stage: Shutdown
         - name: Cleanup Shutdown if Fail
-          include_role:
+          ansible.builtin.include_role:
             name: oracle_database_patch_role
             tasks_from: clean_files_from_server
-        - name: shutdown
-          delegate_to: 127.0.0.1
-          block:
-            - name: Notify for failure
-              include_tasks: notification.yml
-              vars:
-                - call: "fail"
-                - summary_state: "patching"
-            - name: Check if Fail
-              fail: 
-                msg: "Fail"
+        - name: Report the failure and the state left behind (Shutdown)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Shutdown
+            oracle_common_failure_cleanup_done: true
 
+    # No cleanup and no restart on a failed patch step: the databases stay down and the staged patch is kept for
+    # diagnosis, as before.
     - name: Patch the Oracle Database
       block:
         - name: Patch the Oracle Database
-          import_role:
+          ansible.builtin.import_role:
             name: oracle_database_patch_role
       rescue:
-        - name: patch
-          delegate_to: 127.0.0.1
-          block:
-            - name: Notify for failure
-              include_tasks: notification.yml
-              vars:
-                - call: "fail"
-                - summary_state: "patching"
-            - name: Check if Fail
-              fail: 
-                msg: "Fail"
+        - name: Report the failure and the state left behind (Patch)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Patch
 
     - name: Startup the Oracle Database
       block:
         - name: Startup the Oracle Database
-          include_tasks: oracle_control_sid.yml
+          ansible.builtin.include_tasks: oracle_control_sid.yml
           vars:
-            - control: "startup"
-            - listed: '{{  lookup("file", "vars_vault.yml")}}'
+            control: "startup"
       rescue:
+        - name: Record the failure (Startup)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_record
+          vars:
+            oracle_common_failure_stage: Startup
         - name: Cleanup Startup if Fail
-          include_role:
+          ansible.builtin.include_role:
             name: oracle_database_patch_role
             tasks_from: clean_files_from_server
-        - name: startup
-          delegate_to: 127.0.0.1
-          block:
-            - name: Notify for failure
-              include_tasks: notification.yml
-              vars:
-                - call: "fail"
-                - summary_state: "patching"
-            - name: Check if Fail
-              fail: 
-                msg: "Fail"
+        - name: Report the failure and the state left behind (Startup)
+          ansible.builtin.include_role:
+            name: oracle_common
+            tasks_from: failure_report
+          vars:
+            oracle_common_failure_stage: Startup
+            oracle_common_failure_cleanup_done: true
 
   post_tasks:
+    # Removes only what this run created; a path that cannot be removed is reported as a WARNING (never hidden).
     - name: Remove old patching files
-      ignore_errors: yes
-      import_role:
+      ansible.builtin.import_role:
         name: oracle_database_patch_role
         tasks_from: clean_files_from_server
 
-    - name: shutdown
+    - name: Report the successful run
       delegate_to: 127.0.0.1
       block:
         - name: Send Success Notification
-          include_tasks: notification.yml
+          ansible.builtin.include_tasks: notification.yml
           vars:
-            - call: "success"
-            - summary_state: "patching"
+            call: "success"
+            summary_state: "patching"

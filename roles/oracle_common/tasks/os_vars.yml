@@ -1,0 +1,27 @@
+---
+# Platform specifics live in ../vars/<name>.yml. The names are tried in first_found order, most specific first:
+#   <distribution>-<major> (RedHat-9, OracleLinux-9), <os_family>-<major> (RedHat-9 for every rebuild),
+#   <distribution> (RedHat, OracleLinux), <os_family> (RedHat), <system> (Linux, AIX)
+# Every file that exists is loaded, the most generic first, so the most specific file wins for each value and
+# the generic files supply the rest (layering). The <os_family>-<major> layer gives every rebuild of a release
+# (RHEL, Oracle Linux, Rocky, AlmaLinux) the same release file unless a <distribution>-<major>.yml overrides it.
+# Supporting another distribution or release means adding one file; no task changes.
+- name: Find the OS-specific variable files
+  ansible.builtin.set_fact:
+    __oracle_common_os_var_files: >-
+      {{ __oracle_common_os_var_names_first_found | reverse | reject('equalto', '') | reject('match', '\A-|-\Z')
+         | unique | map('regex_replace', '\A(.*)\Z', role_path ~ '/vars/\1.yml') | select('file') | list }}
+  vars:
+    __oracle_common_os_var_names_first_found:
+      - "{{ ansible_facts['distribution'] | default('') }}-{{ ansible_facts['distribution_major_version'] | default('') }}"
+      - "{{ ansible_facts['os_family'] | default('') }}-{{ ansible_facts['distribution_major_version'] | default('') }}"
+      - "{{ ansible_facts['distribution'] | default('') }}"
+      - "{{ ansible_facts['os_family'] | default('') }}"
+      - "{{ ansible_facts['system'] }}"
+
+- name: Load the OS-specific variables (generic first, most specific last)
+  ansible.builtin.include_vars:
+    file: "{{ item }}"
+  loop: "{{ __oracle_common_os_var_files }}"
+  loop_control:
+    label: "{{ item | basename }}"

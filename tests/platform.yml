@@ -1,0 +1,162 @@
+---
+# Regression test for the platform guard (roles/oracle_common/tasks/guard.yml), the layered OS variables
+# (tasks/os_vars.yml) and the prerequisite package check (tasks/packages.yml). Runs on the controller only with
+# simulated facts and changes nothing. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/platform.yml
+#
+# EL7 and older, Amazon Linux 2 and unsupported kernels are refused with a message naming the distribution and
+# version, both by the Python-free check made before facts are gathered (tasks/guard_os_release.yml) and by the
+# fact-based check. Supported platforms load exactly the expected layered files (generic first, most specific last), so
+# the package list, platform prefix and package manager come from the right files (EL8/EL9/EL10 per release for
+# every Red Hat rebuild; AIX never uses rpm package_facts). The AIX fileset check is exercised with a fake
+# read-only query command.
+- name: Platform guard, OS variables and package check regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/oracle_common/defaults/main/platform.yml
+    - ../roles/oracle_common/vars/main.yml
+  vars:
+    platform_cases:
+      - name: RHEL 7 refused
+        facts: {system: Linux, os_family: RedHat, distribution: RedHat, distribution_major_version: "7", distribution_version: "7.9"}
+        refused: true
+        message: RedHat 7.9 is not supported
+      - name: Oracle Linux 7 refused
+        facts: {system: Linux, os_family: RedHat, distribution: OracleLinux, distribution_major_version: "7", distribution_version: "7.9"}
+        refused: true
+        message: OracleLinux 7.9 is not supported
+      - name: CentOS 6 refused
+        facts: {system: Linux, os_family: RedHat, distribution: CentOS, distribution_major_version: "6", distribution_version: "6.10"}
+        refused: true
+        message: CentOS 6.10 is not supported
+      - name: Amazon Linux 2 refused
+        facts: {system: Linux, os_family: RedHat, distribution: Amazon, distribution_major_version: "2", distribution_version: "2"}
+        refused: true
+        message: Amazon 2 is not supported
+      - name: Red Hat family without a release refused
+        facts: {system: Linux, os_family: RedHat, distribution: RedHat}
+        refused: true
+        message: RedHat (unknown release) is not supported
+      - name: FreeBSD refused
+        facts: {system: FreeBSD, os_family: FreeBSD, distribution: FreeBSD, distribution_major_version: "14", distribution_version: "14.1"}
+        refused: true
+        message: OS not supported (FreeBSD FreeBSD 14.1)
+      - name: RHEL 8 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: RedHat, distribution_major_version: "8", distribution_version: "8.10"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-8.yml]
+      - name: Oracle Linux 8 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: OracleLinux, distribution_major_version: "8", distribution_version: "8.9"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-8.yml]
+      - name: RHEL 9 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: RedHat, distribution_major_version: "9", distribution_version: "9.4"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-9.yml]
+      - name: Rocky 9 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: Rocky, distribution_major_version: "9", distribution_version: "9.4"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-9.yml]
+      - name: RHEL 10 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: RedHat, distribution_major_version: "10", distribution_version: "10.0"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-10.yml]
+      - name: AlmaLinux 10 accepted
+        facts: {system: Linux, os_family: RedHat, distribution: AlmaLinux, distribution_major_version: "10", distribution_version: "10.0"}
+        refused: false
+        files: [Linux.yml, RedHat.yml, RedHat-10.yml]
+      - name: AIX 7.2 accepted (no rpm package facts, empty fileset list)
+        facts: {system: AIX, os_family: AIX, distribution: AIX, distribution_major_version: "7", distribution_version: "7.2"}
+        refused: false
+        files: [AIX.yml]
+        has_packages: false
+      - name: Amazon Linux 2023 accepted (no release file, empty list)
+        facts: {system: Linux, os_family: RedHat, distribution: Amazon, distribution_major_version: "2023", distribution_version: "2023"}
+        refused: false
+        files: [Linux.yml, RedHat.yml]
+        has_packages: false
+      - name: Ubuntu accepted (generic Linux, no package check)
+        facts: {system: Linux, os_family: Debian, distribution: Ubuntu, distribution_major_version: "24", distribution_version: "24.04"}
+        refused: false
+        files: [Linux.yml]
+        has_packages: false
+    package_listing: |-
+      #Package Name:Fileset:Level:State:PTF Id:Fix State:Type:Description:Destination Dir.:Uninstaller
+      bos.adt:bos.adt.base:7.2.5.0: : :C:F:Base Application Development Toolkit
+      bos.perf:bos.perf.perfstat:7.2.5.0: : :C:F:Performance Statistics Interface
+      xlC.rte:xlC.rte:16.1.0.10: : :C:F:IBM XL C++ Runtime for AIX
+    package_cases:
+      - {name: all filesets installed, packages: [bos.adt.base, xlC.rte], fails: false}
+      - {name: a fileset missing, packages: [bos.adt.base, rsct.basic.rte], fails: true, message: "NOT BEING FOUND: ['rsct.basic.rte']"}
+      - {name: header line is not a fileset, packages: [Fileset], fails: true, message: "NOT BEING FOUND: ['Fileset']"}
+      - {name: empty list skips the check, packages: [], fails: false}
+      - {name: check disabled, packages: [rsct.basic.rte], check: false, fails: false}
+      - {name: list without a way to read packages, packages: [bos.adt.base], command: [], fails: true, message: cannot be checked}
+    # Text of the Python-free pre-check (uname -s, /etc/os-release, /etc/redhat-release), as read by tasks/guard.yml.
+    release_cases:
+      - name: RHEL 7.9 refused
+        # With the carriage returns a pseudo-terminal adds to raw output.
+        text: "Linux\r\nNAME=\"Red Hat Enterprise Linux Server\"\r\nVERSION=\"7.9 (Maipo)\"\r\nID=\"rhel\"\r\n\
+          ID_LIKE=\"fedora\"\r\nVERSION_ID=\"7.9\"\r\nRed Hat Enterprise Linux Server release 7.9 (Maipo)\r\n"
+        message: Red Hat Enterprise Linux Server 7.9 is not supported
+      - name: Oracle Linux 7.9 refused
+        text: "Linux\nNAME=\"Oracle Linux Server\"\nID=\"ol\"\nID_LIKE=\"fedora\"\nVERSION_ID=\"7.9\"\n"
+        message: Oracle Linux Server 7.9 is not supported
+      - name: Amazon Linux 2 refused
+        text: "Linux\nNAME=\"Amazon Linux\"\nVERSION=\"2\"\nID=\"amzn\"\nID_LIKE=\"centos rhel fedora\"\nVERSION_ID=\"2\"\n"
+        message: Amazon Linux 2 is not supported
+      - name: CentOS 6 (redhat-release only) refused
+        text: "Linux\nCentOS release 6.10 (Final)\n"
+        message: CentOS 6.10 is not supported
+      - name: rebuild known only by ID_LIKE refused
+        text: "Linux\nNAME=\"Some EL Rebuild\"\nID=someel\nID_LIKE=\"rhel centos fedora\"\nVERSION_ID=7.6\n"
+        message: Some EL Rebuild 7.6 is not supported
+      - name: RHEL 8.10 accepted
+        text: "Linux\nNAME=\"Red Hat Enterprise Linux\"\nID=\"rhel\"\nID_LIKE=\"fedora\"\nVERSION_ID=\"8.10\"\nRed Hat Enterprise Linux release 8.10 (Ootpa)\n"
+      - name: Rocky 9 accepted
+        text: "Linux\nNAME=\"Rocky Linux\"\nID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\nVERSION_ID=\"9.4\"\n"
+      - name: Amazon Linux 2023 accepted
+        text: "Linux\nNAME=\"Amazon Linux\"\nID=\"amzn\"\nID_LIKE=\"fedora\"\nVERSION_ID=\"2023\"\n"
+      - {name: AIX accepted, text: "AIX\n"}
+      - name: Ubuntu accepted
+        text: "Linux\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\n"
+    # EL7-only packages that made the original check fail on every EL8/EL9 host, and packages every release lists.
+    platform_el7_only_packages: [compat-libcap1, compat-libstdc++-33]
+    platform_core_packages: [bc, binutils, glibc, glibc-devel, ksh, libaio, libgcc, libstdc++, make, smartmontools, sysstat]
+  tasks:
+    - name: Check the Red Hat family release package lists
+      ansible.builtin.assert:
+        that:
+          - __platform_lists | map('select', 'in', platform_el7_only_packages) | map('list') | flatten | length == 0
+          - __platform_lists | map('intersect', platform_core_packages) | map('length') | unique | list == [platform_core_packages | length]
+        fail_msg: >-
+          RedHat-8/9/10.yml must not list {{ platform_el7_only_packages }} and must each list {{ platform_core_packages }}
+        quiet: true
+      vars:
+        __platform_lists: >-
+          {{ query('ansible.builtin.file', *(['RedHat-8.yml', 'RedHat-9.yml', 'RedHat-10.yml']
+                   | map('regex_replace', '\A(.*)\Z', playbook_dir ~ '/../roles/oracle_common/vars/\1') | list))
+             | map('from_yaml') | map(attribute='__oracle_common_prereq_packages') | list }}
+
+    - name: Run the platform cases
+      ansible.builtin.include_tasks: tasks/platform_case.yml
+      loop: "{{ platform_cases }}"
+      loop_control:
+        loop_var: platform_case
+        label: "{{ platform_case.name }}"
+
+    - name: Run the OS release cases (checked before facts are gathered)
+      ansible.builtin.include_tasks: tasks/os_release_case.yml
+      loop: "{{ release_cases }}"
+      loop_control:
+        loop_var: release_case
+        label: "{{ release_case.name }}"
+
+    - name: Run the package check cases
+      ansible.builtin.include_tasks: tasks/package_case.yml
+      loop: "{{ package_cases }}"
+      loop_control:
+        loop_var: package_case
+        label: "{{ package_case.name }}"

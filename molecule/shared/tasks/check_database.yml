@@ -1,0 +1,88 @@
+---
+# Checks one database after converge (include variable molecule_db, an entry of molecule_databases):
+#   patched: true   the Release Update (and the OJVM patch, when the database has Java) is in its SQL patch registry;
+#                   the playbook stopped it before the patch, datapatch ran in an instance started in upgrade mode
+#                   (OPEN MIGRATE), and the database was started normally afterwards; its alert log was rotated
+#   patched: false  untouched: no SQL patch, never stopped (only the startup done by prepare.yml), alert log not rotated
+# Either way it must be running now (instance processes, listeners) with every PDB open READ WRITE.
+- name: Read the stub state of {{ molecule_db.sid }}
+  ansible.builtin.slurp:
+    src: "{{ molecule_oracle_base }}/molecule_state/{{ molecule_db.sid }}/{{ item }}"
+  loop: [sqlpatch, history, pdbs, pdbs_rw]
+  register: __molecule_db_slurp
+
+- name: List the processes for {{ molecule_db.sid }}
+  ansible.builtin.command:
+    argv: [ps, -e, -o, args=]
+  register: __molecule_db_ps
+  changed_when: false
+
+- name: Find the rotated alert logs of {{ molecule_db.sid }}
+  ansible.builtin.find:
+    paths: "{{ molecule_oracle_base }}/diag/rdbms/{{ molecule_db.sid | lower }}/{{ molecule_db.sid }}/trace"
+    patterns: "alert_{{ molecule_db.sid }}.log.*"
+  register: __molecule_db_rotated
+
+- name: Decode the stub state of {{ molecule_db.sid }}
+  ansible.builtin.set_fact:
+    # {"<file>": [non-empty lines]}. splitlines(), not split('\n'): a Jinja string in a block scalar is not unescaped,
+    # so '\n' there is a literal backslash and n, and nothing would be split.
+    __molecule_db_state: >-
+      {%- set ns = namespace(out={}) -%}
+      {%- for r in __molecule_db_slurp.results -%}
+      {%-   set ns.out = ns.out | combine({r.item: (r.content | b64decode).splitlines() | map('trim') | reject('equalto', '') | list}) -%}
+      {%- endfor -%}
+      {{ ns.out }}
+
+- name: Check the database runs with its listeners and every PDB open READ WRITE - {{ molecule_db.sid }}
+  ansible.builtin.assert:
+    that:
+      - ('ora_pmon_' ~ molecule_db.sid) in __molecule_processes
+      - ('ora_smon_' ~ molecule_db.sid) in __molecule_processes
+      - __molecule_missing_listeners | length == 0
+      - (__molecule_db_state.pdbs | sort) == (__molecule_db_state.pdbs_rw | sort)
+    fail_msg: >-
+      {{ molecule_db.sid }}: processes {{ __molecule_processes | select('search', 'ora_|tnslsnr') | list }}; listeners not
+      running: {{ __molecule_missing_listeners }}; PDBs {{ __molecule_db_state.pdbs }}, open READ WRITE {{ __molecule_db_state.pdbs_rw }}
+  vars:
+    __molecule_processes: "{{ __molecule_db_ps.stdout_lines | map('trim') | list }}"
+    __molecule_missing_listeners: >-
+      {{ molecule_db.listeners | map('lower') | map('regex_replace', '\A(.*)\Z', molecule_db.home ~ '/bin/tnslsnr -s \1 -inherit')
+         | reject('in', __molecule_processes) | list }}
+
+- name: Check the patch of {{ molecule_db.sid }}
+  when: molecule_db.patched | bool
+  ansible.builtin.assert:
+    that:
+      # Release Update applied by datapatch (exactly one row), OJVM patch only with Java.
+      - __molecule_rows_ru | length == 1
+      - __molecule_rows_ojvm | length == (1 if molecule_db.java else 0)
+      # Stopped by the playbook before the patch, datapatch in upgrade mode, started normally at the end.
+      - "'datapatch' in __molecule_history"
+      - "'shutdown' in __molecule_history[:__molecule_history.index('datapatch')]"
+      - __molecule_history[__molecule_history.index('datapatch') - 1] == 'startup OPEN MIGRATE'
+      - __molecule_history | last == 'startup OPEN'
+      # utlrp after datapatch when datapatch left new invalid objects (invalid_delta).
+      - (molecule_db.invalid_delta | default(0) | int == 0) or ('utlrp' in __molecule_history[__molecule_history.index('datapatch'):])
+      - __molecule_db_rotated.matched >= 1
+    fail_msg: >-
+      {{ molecule_db.sid }}: SQL patch registry {{ __molecule_db_state.sqlpatch }}; history {{ __molecule_history }};
+      rotated alert logs {{ __molecule_db_rotated.matched }}
+    success_msg: "{{ molecule_db.sid }} is patched: {{ __molecule_db_state.sqlpatch }}"
+  vars:
+    __molecule_history: "{{ __molecule_db_state.history }}"
+    __molecule_rows_ru: "{{ __molecule_db_state.sqlpatch | select('match', molecule_patch.ru_id ~ ' SUCCESS [0-9]+ APPLY ') | list }}"
+    __molecule_rows_ojvm: "{{ __molecule_db_state.sqlpatch | select('match', molecule_patch.ojvm_id ~ ' SUCCESS [0-9]+ APPLY ') | list }}"
+
+- name: Check the database was left alone - {{ molecule_db.sid }}
+  when: not (molecule_db.patched | bool)
+  ansible.builtin.assert:
+    that:
+      - __molecule_db_state.sqlpatch | length == 0
+      # Only the startup done by prepare.yml: never stopped or restarted by the playbook.
+      - __molecule_db_state.history == ['startup OPEN']
+      - __molecule_db_rotated.matched == 0
+    fail_msg: >-
+      {{ molecule_db.sid }} (not in scope) was changed: SQL patch registry {{ __molecule_db_state.sqlpatch }};
+      history {{ __molecule_db_state.history }}; rotated alert logs {{ __molecule_db_rotated.matched }}
+    success_msg: "{{ molecule_db.sid }} (not in scope) was left alone"

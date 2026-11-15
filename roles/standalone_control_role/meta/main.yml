@@ -1,0 +1,28 @@
+---
+# Role metadata. Inputs are documented and validated in meta/argument_specs.yml.
+galaxy_info:
+  role_name: standalone_control_role
+  author: Oracle patching automation maintainers
+  description: >-
+    Starts and stops a standalone Oracle database, its listeners and PDB listener, with alert log and
+    listener log checks.
+  license: GPL-3.0-or-later
+  # Same floor as the pinned controller toolchain in requirements.txt (ansible-core 2.22.0).
+  min_ansible_version: "2.22"
+  # Same platforms as oracle_common (EL covers RHEL and its rebuilds; release 10 is covered by
+  # oracle_common's RedHat-10.yml; EL7 and Amazon Linux 2 are refused by oracle_common).
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: AIX
+      versions:
+        - "7.2"
+  galaxy_tags:
+    - oracle
+    - database
+    - patching
+
+# No role dependencies: the playbooks import oracle_common explicitly, once, before this role.
+dependencies: []

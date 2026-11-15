@@ -1,0 +1,134 @@
+---
+# TEST FIXTURE (prepare.yml): one fake database (include variable molecule_db, an entry of molecule_databases):
+#   - the stub state in <ORACLE_BASE>/molecule_state/<SID>/ (version, CDB and PDBs, Java components, empty SQL patch
+#     registry; see files/stubs/sqlplus);
+#   - its environment file <molecule_env_dir>/<SID>.env (root-owned, 0644: the scripts accept files owned by root) and
+#     its oratab entry, so home_inventory.bash finds it through both;
+#   - an alert log and a log per listener in the diag tree (rename_logs.bash, check_alert_log.bash,
+#     check_listener_logs.bash);
+#   - then starts it (instance processes, PDBs opened) and its listeners as the database owner, like a running host.
+- name: Create the stub state directory of {{ molecule_db.sid }}
+  ansible.builtin.file:
+    path: "{{ molecule_oracle_base }}/molecule_state/{{ molecule_db.sid }}"
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: "0750"
+
+- name: Write the stub state of {{ molecule_db.sid }}
+  ansible.builtin.copy:
+    dest: "{{ molecule_oracle_base }}/molecule_state/{{ molecule_db.sid }}/{{ item.key }}"
+    content: "{{ item.value }}"
+    owner: oracle
+    group: oinstall
+    mode: "0640"
+    # Written once: a second prepare must not reset what the stubs recorded.
+    force: false
+  loop: "{{ __molecule_state | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    __molecule_state:
+      version: "{{ molecule_db_version }}\n"
+      version_full: "{{ molecule_db_version_full }}\n"
+      cdb: "{{ 'YES' if (molecule_db.pdbs | length > 0) else 'NO' }}\n"
+      pdbs: "{{ (molecule_db.pdbs | join('\n') ~ '\n') if (molecule_db.pdbs | length > 0) else '' }}"
+      pdbs_rw: ""
+      # Double-quoted YAML, so "\n" is a newline (in a block scalar it would stay a literal backslash and n).
+      jvm_components: "{{ 'JServer JAVA Virtual Machine 19.0.0.0.0 VALID\nOracle Database Java Packages 19.0.0.0.0 VALID\n'
+        if molecule_db.java else '' }}"
+      sqlpatch: ""
+      invalid_count: "0\n"
+      invalid_base: "0\n"
+      invalid_delta: "{{ molecule_db.invalid_delta | default(0) }}\n"
+      history: ""
+
+- name: Write the environment file of {{ molecule_db.sid }}
+  ansible.builtin.copy:
+    dest: "{{ molecule_env_dir }}/{{ molecule_db.sid }}.env"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Test fixture (molecule/shared/tasks/fake_database.yml)
+      ORACLE_SID={{ molecule_db.sid }}; export ORACLE_SID
+      ORACLE_BASE={{ molecule_oracle_base }}; export ORACLE_BASE
+      ORACLE_HOME={{ molecule_db.home }}; export ORACLE_HOME
+      PATH=$ORACLE_HOME/bin:$ORACLE_HOME/OPatch:/usr/local/bin:/usr/bin:/bin; export PATH
+      NLS_LANG=american_america.AL32UTF8; export NLS_LANG
+
+- name: Register the database in oratab - {{ molecule_db.sid }}
+  ansible.builtin.lineinfile:
+    path: /etc/oratab
+    line: "{{ molecule_db.sid }}:{{ molecule_db.home }}:N"
+    regexp: '^{{ molecule_db.sid | regex_escape }}:'
+
+- name: Create the diag directories of {{ molecule_db.sid }}
+  ansible.builtin.file:
+    path: "{{ (molecule_oracle_base ~ '/diag/' ~ item) | regex_replace('/+\\Z', '') }}"
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: "0750"
+  # Parents first, each directory listed (file creates missing parents as root, so every level is named here to get
+  # the owner and mode). No regular expressions: a Jinja string in a block scalar is not unescaped, so '\\A' there is a
+  # literal backslash and the listener directories were silently left out (the listener log copy then failed).
+  loop: >-
+    {{ ['', 'rdbms', 'rdbms/' ~ __molecule_db_name, 'rdbms/' ~ __molecule_db_name ~ '/' ~ molecule_db.sid,
+        'rdbms/' ~ __molecule_db_name ~ '/' ~ molecule_db.sid ~ '/trace', 'tnslsnr', __molecule_listener_root]
+       + ([__molecule_listener_root ~ '/'] | product(__molecule_listeners) | map('join') | list)
+       + ([__molecule_listener_root ~ '/'] | product(__molecule_listeners, ['/trace']) | map('join') | list) }}
+  vars:
+    __molecule_db_name: "{{ molecule_db.sid | lower }}"
+    __molecule_listener_root: "tnslsnr/{{ ansible_facts['nodename'] }}"
+    __molecule_listeners: "{{ molecule_db.listeners | map('lower') | list }}"
+
+# diag/rdbms/<db name, lower case>/<SID>/trace/alert_<SID>.log, as Oracle names it.
+- name: Write the alert log of {{ molecule_db.sid }}
+  ansible.builtin.copy:
+    dest: "{{ molecule_oracle_base }}/diag/rdbms/{{ molecule_db.sid | lower }}/{{ molecule_db.sid }}/trace/alert_{{ molecule_db.sid }}.log"
+    content: "Starting ORACLE instance (normal) (test fixture)\nCompleted: ALTER DATABASE OPEN\n"
+    owner: oracle
+    group: oinstall
+    mode: "0640"
+    force: false
+
+# diag/tnslsnr/<host>/<listener, lower case>/trace/<listener>.log; no "Error" line, so the log check passes.
+- name: Write the listener logs of {{ molecule_db.sid }}
+  ansible.builtin.copy:
+    dest: "{{ molecule_oracle_base }}/diag/tnslsnr/{{ ansible_facts['nodename'] }}/{{ item }}/trace/{{ item }}.log"
+    content: "listener {{ item }} started (test fixture)\n"
+    owner: oracle
+    group: oinstall
+    mode: "0640"
+    force: false
+  loop: "{{ molecule_db.listeners | map('lower') | list }}"
+
+- name: Start the database and open its PDBs - {{ molecule_db.sid }}
+  ansible.builtin.command:
+    argv:
+      - /bin/bash
+      - -c
+      - . "$1" && printf '%s\n' startup 'alter pluggable database all open;' exit | sqlplus -S / as sysdba
+      - molecule-start-database
+      - "{{ molecule_env_dir }}/{{ molecule_db.sid }}.env"
+    # $1 is for bash; the module must not expand it.
+    expand_argument_vars: false
+  become: true
+  become_user: oracle
+  register: __molecule_db_start
+  changed_when: "'ORACLE instance started.' in __molecule_db_start.stdout"
+  failed_when: >-
+    __molecule_db_start.rc != 0
+    or not ('ORACLE instance started.' in __molecule_db_start.stdout or 'ORA-01081' in __molecule_db_start.stdout)
+
+- name: Start the listeners of {{ molecule_db.sid }}
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/bin/bash', '-c', '. "$1" && shift && for l; do lsnrctl status "$l" >/dev/null || lsnrctl start "$l" || exit 1; done',
+          'molecule-start-listeners', molecule_env_dir ~ '/' ~ molecule_db.sid ~ '.env'] + molecule_db.listeners }}
+    expand_argument_vars: false
+  become: true
+  become_user: oracle
+  register: __molecule_listener_start
+  changed_when: "'Starting ' in __molecule_listener_start.stdout"

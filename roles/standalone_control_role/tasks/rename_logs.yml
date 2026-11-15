@@ -1,33 +1,49 @@
 ---
-##This script renames existing alert log and listener logs so that new logs will be created.
+## Renames the existing alert log so that a new one is created (rename_logs.bash, copied by copy_scripts.yml). Logged as
+## before (<remote_output_directory>/log.<rename_logs_script>.<YYYY.MM.DD>); no shell interpolation.
+## Runs before the database is started: exit code 4 (alert log or $ORACLE_BASE/diag/tnslsnr not found) is a WARNING
+## and the database is still started (the original failed here and left a freshly patched database down);
+## standalone_control_role_fail_on_rename_logs_error: true restores the failure. Any other non-zero exit code fails.
 
-- name: copy rename_logs script to {{ server_name }}
-  vars:
-  copy:
-    src: "{{ rename_logs_script }}"
-    dest: "{{ remote_script_directory }}/{{ rename_logs_script }}"
-    mode: "{{script_permission}}"
-    force: yes
-  delegate_to: "{{ server_name }}"
-
+# The listener names (dbListener, pdbListener) follow ORACLE_SID as before; an empty one is left out, as the original
+# shell's word splitting did.
 - name: Rename alert log for {{ ORACLE_SID }}
-  vars:
-    listenerA: "{{ sid_server_dict[ORACLE_SID].dbListener }}"
-    listenerB: "{{ sid_server_dict[ORACLE_SID].pdbListener }}"
-  shell: >
-    {{ remote_script_directory }}/{{ rename_logs_script }}
-    {{ ORACLE_SID }} {{listenerA}} {{listenerB}}
-    &> >(tee {{ remote_output_directory }}/log.{{ rename_logs_script }}.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
+  ansible.builtin.command:
+    argv: >-
+      {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'rename_logs',
+          remote_output_directory ~ '/log.' ~ standalone_control_role_rename_logs_script,
+          remote_script_directory ~ '/' ~ standalone_control_role_rename_logs_script, ORACLE_SID]
+         + (sid_server_dict[standalone_control_role_sid_key].dbListener | string).split()
+         + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
-  register: rename_logs_status
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
-  failed_when: rename_logs_status.rc != 4 and rename_logs_status.rc != 0
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_rename_logs_status
+  # The alert log is rotated only when the script succeeds.
+  changed_when: standalone_control_role_rename_logs_status.rc == 0
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
+  failed_when: standalone_control_role_rename_logs_status.rc not in [0, 4]
 
-- name: print rename_logs_script status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ rename_logs_status.stdout_lines }}"
-  failed_when: rename_logs_status.rc == 4
+- name: Print rename_logs_script status for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_rename_logs_status.stdout_lines }}"
+
+- name: Report the alert log that was not rotated for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: the alert log of {{ ORACLE_SID }} was not rotated (rename_logs exit code 4, see the output above); the
+      database is started anyway (standalone_control_role_fail_on_rename_logs_error is false).
+  when:
+    - standalone_control_role_rename_logs_status.rc == 4
+    - not (standalone_control_role_fail_on_rename_logs_error | bool)
+
+- name: Fail when the alert log was not rotated for {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that: standalone_control_role_rename_logs_status.rc != 4
+    fail_msg: >-
+      The alert log of {{ ORACLE_SID }} was not rotated (rename_logs exit code 4, see the output above) and
+      standalone_control_role_fail_on_rename_logs_error is true: the database is NOT started.
+    quiet: true
+  when: standalone_control_role_fail_on_rename_logs_error | bool

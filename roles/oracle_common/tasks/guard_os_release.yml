@@ -1,0 +1,42 @@
+---
+# Refuses EL7 and older and Amazon Linux 2 from the text of `uname -s` and /etc/os-release (or /etc/redhat-release
+# on EL6), before any module runs on the host: ansible-core 2.22 modules (including fact gathering) need Python 3.9
+# or later on the target, which those releases do not have, so the fact-based check in tasks/guard.yml would never
+# be reached there. Input: oracle_common_os_release_text (the output of the static raw command in tasks/guard.yml).
+- name: Check the target OS release before gathering facts
+  ansible.builtin.assert:
+    that: not __oracle_common_release_refused
+    fail_msg: >-
+      Failed: {{ __oracle_common_release_name }} {{ __oracle_common_release_version | default('(unknown release)', true) }}
+      is not supported. Red Hat family releases before {{ __oracle_common_redhat_min_major_version }} (such as EL7) and
+      Amazon Linux 2 are refused: ansible-core 2.22 needs Python 3.9 or later on the target. Supported Red Hat family
+      releases: {{ __oracle_common_redhat_min_major_version }} and later.
+    quiet: true
+  vars:
+    __oracle_common_release_text: "{{ oracle_common_os_release_text | default('') | string | regex_replace('\\r', '') }}"
+    # One os-release field (KEY=value or KEY="value") per line.
+    __oracle_common_release_field: '(?m)^{0}="?([^"\n]*?)"?[ \t]*(?:\n|\Z)'
+    __oracle_common_release_id: >-
+      {{ __oracle_common_release_text | regex_findall(__oracle_common_release_field.format('ID')) | first | default('') | lower }}
+    __oracle_common_release_id_like: >-
+      {{ __oracle_common_release_text | regex_findall(__oracle_common_release_field.format('ID_LIKE')) | first | default('') | lower }}
+    __oracle_common_release_os_name: >-
+      {{ __oracle_common_release_text | regex_findall(__oracle_common_release_field.format('NAME')) | first | default('') }}
+    # /etc/redhat-release (EL6 has no /etc/os-release), e.g. "CentOS release 6.10 (Final)".
+    __oracle_common_redhat_release: >-
+      {{ __oracle_common_release_text | regex_findall('(?m)^(.*?) release ([0-9]+(?:\.[0-9]+)*)') | first | default([]) }}
+    __oracle_common_release_name: >-
+      {{ __oracle_common_release_os_name if (__oracle_common_release_os_name | length > 0)
+         else (__oracle_common_redhat_release | first | default('Red Hat family')) }}
+    __oracle_common_release_version: >-
+      {{ (__oracle_common_release_text | regex_findall(__oracle_common_release_field.format('VERSION_ID')) | first | default(''))
+         or (__oracle_common_redhat_release | last | default('')) }}
+    __oracle_common_release_redhat_family: >-
+      {{ (__oracle_common_release_id in ['rhel', 'centos', 'ol', 'rocky', 'almalinux', 'amzn', 'fedora', 'scientific', 'cloudlinux', 'eurolinux'])
+         or ('rhel' in __oracle_common_release_id_like.split()) or ('fedora' in __oracle_common_release_id_like.split())
+         or (__oracle_common_release_id | length == 0 and __oracle_common_redhat_release | length > 0) }}
+    __oracle_common_release_major: "{{ (__oracle_common_release_version | string).split('.') | first }}"
+    __oracle_common_release_refused: >-
+      {{ __oracle_common_release_redhat_family
+         and ((__oracle_common_release_major is not match('\A[0-9]+\Z'))
+              or (__oracle_common_release_major | int < __oracle_common_redhat_min_major_version | int)) }}

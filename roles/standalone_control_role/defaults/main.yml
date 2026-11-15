@@ -1,1 +1,69 @@
-#ansible_ssh_user: 
+---
+# Defaults for standalone_control_role (moved from vars/main.yml so inventories can override them).
+#
+# The working directories and the script mode come from oracle_common, which the playbook runs first:
+# remote_script_directory / remote_output_directory (oracle_common_remote_*_directory, set as facts by
+# initialization_role) and oracle_common_modes.script (oracle_common_script_permission, alias script_permission;
+# 0777 is no longer allowed). The connection user comes from the inventory (ansible_user).
+
+standalone_control_role_role_version: v1.0.0
+
+# Accepted but unused (as in the original): seconds to pause between control steps. The original name
+# timeToPause is accepted as an alias.
+standalone_control_role_time_to_pause: "{{ timeToPause | default(120) }}"
+
+# Accepted but unused (as in the original). The original names remote_script_directory_base and
+# remote_output_directory_base are accepted as aliases.
+standalone_control_role_remote_script_directory_base: >-
+  {{ remote_script_directory_base | default('/tmp/ora_ansible_scripts_' ~ (DATABASE_NAME | default(''))) }}
+standalone_control_role_remote_output_directory_base: "{{ remote_output_directory_base | default('~/ansiblescripts/startup/log') }}"
+
+# Script file names (roles/standalone_control_role/files/). Each original variable name (check_mount_script,
+# check_alertLog_script, start_database_script, ...) is still accepted as an alias and wins when set.
+standalone_control_role_check_mount_script: "{{ check_mount_script | default('check_mount.bash') }}"
+standalone_control_role_check_timestamp_script: "{{ check_timestamp_script | default('check_timestamp.bash') }}"
+standalone_control_role_check_alert_log_script: "{{ check_alertLog_script | default('check_alert_log.bash') }}"
+standalone_control_role_check_listener_logs_script: "{{ check_listenerLogs_script | default('check_listener_logs.bash') }}"
+standalone_control_role_rename_logs_script: "{{ rename_logs_script | default('rename_logs.bash') }}"
+standalone_control_role_start_database_script: "{{ start_database_script | default('database_ctl.bash') }}"
+standalone_control_role_start_listener_script: "{{ start_listener_script | default('listener_ctl.bash') }}"
+standalone_control_role_start_pdb_script: "{{ start_pdb_script | default('pdb_ctl.bash') }}"
+# pdb_listener_ctl.bash never existed; the PDB listener is started with the listener script
+# (standalone_control_role_start_listener_script, see start_pdb_listener.yml). The name is kept as an accepted variable.
+standalone_control_role_start_pdb_listener_script: "{{ start_pdbListener_script | default('listener_ctl.bash') }}"
+standalone_control_role_stop_pdb_script: "{{ stop_pdb_script | default('pdb_ctl.bash') }}"
+standalone_control_role_stop_pdb_listener_script: "{{ stop_pdbListener_script | default('listener_ctl.bash') }}"
+standalone_control_role_stop_database_script: "{{ stop_database_script | default('database_ctl.bash') }}"
+standalone_control_role_stop_listener_script: "{{ stop_listener_script | default('listener_ctl.bash') }}"
+
+# Log file prefix of the alert log check, in <remote_output_directory>: <prefix>.<YYYY.MM.DD>. The original wrote it to
+# log.<check_mount_script> (log.check_mount.bash, a copy-and-paste slip: the alert log check never ran check_mount.bash);
+# it is now named after the alert log check script. Set "log.check_mount.bash" to keep the original file name.
+standalone_control_role_alert_log_check_log: "log.{{ standalone_control_role_check_alert_log_script }}"
+
+# Log checks after a startup. As before, ORA- errors in the alert log, or listener log errors (check_listener_logs
+# exit code 4), are reported as a WARNING and the run goes on; true makes them fail the startup.
+standalone_control_role_fail_on_alert_log_errors: false
+standalone_control_role_fail_on_listener_log_errors: false
+
+# Log rotation before a startup (rename_logs.bash). A missing alert log or listener log directory (exit code 4) used to
+# fail the startup block, leaving a freshly patched database down; it is now a WARNING and the database is started.
+# true restores the original behaviour (the startup fails before the database is started). Any other non-zero exit
+# code still fails.
+standalone_control_role_fail_on_rename_logs_error: false
+
+# After a shutdown, the database must be really down (no ora_pmon_<SID> process left) before anything else runs: the
+# process list is checked up to standalone_control_role_shutdown_verify_retries times,
+# standalone_control_role_shutdown_verify_delay seconds apart (default: up to 2 minutes). Aliases:
+# oracle_patch_shutdown_verify_retries, oracle_patch_shutdown_verify_delay.
+standalone_control_role_shutdown_verify_retries: "{{ oracle_patch_shutdown_verify_retries | default(12) }}"
+standalone_control_role_shutdown_verify_delay: "{{ oracle_patch_shutdown_verify_delay | default(10) }}"
+
+# ORACLE_SID as given in the patch scope (oracle_control_sid.yml passes it; ORACLE_SID itself is lower-cased, as before).
+# Used to find the sid_server_dict entry when there is none for the lower-case SID. Empty: ORACLE_SID only.
+standalone_control_role_sid: ""
+# Environment of the control scripts. oracle_control_sid.yml passes ORA_ENV_FILE of each database in a patch run (the
+# environment file the shared ORACLE_HOME check validated, oracle_common_run.databases[<SID>].env_file); empty: the
+# scripts' default /local/<ORACLE_SID>.env, as before. It also passes ORA_ENV_FILE_ALLOW_ANY_OWNER=true, in a patch run
+# and outside one, when oracle_common_env_file_allow_any_owner (alias oracle_patch_env_file_allow_any_owner) is true.
+standalone_control_role_environment: {}

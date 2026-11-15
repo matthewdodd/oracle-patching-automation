@@ -1,62 +1,158 @@
 ---
+# Downloads the patch bundle into the staging directory (temp_dir) and extracts it, as the staging owner (b_user): TLS
+# verified, checksum required, least-privilege modes (directory oracle_common_dir_mode 0750, bundle oracle_common_file_mode
+# 0640, extracted tree u=rwX,g=rX,o=; 0777 is gone).
+# Per-run directories (oracle_common_run.unique, the default): the generated staging directory carries "_<run id>", must
+# not exist yet (a path that exists belongs to another run or was planted, and is refused), and is recorded in
+# oracle_database_patch_role_created_paths so the cleanup removes it and nothing else. With the original fixed names
+# (oracle_common_unique_work_dirs false) or a staging directory given explicitly (patch_folder_name,
+# oracle_common_patch_staging_dir: oracle_common_run.staging_fixed) an earlier staging directory is removed first, as
+# before, so the next run can use it again.
 - name: Copy files to server
-  become: yes
+  become: true
   become_user: "{{ b_user }}"
+  vars:
+    __oracle_database_patch_role_unique: >-
+      {{ not (oracle_common_run.staging_fixed | default(not (oracle_common_run.unique | default(false) | bool)) | bool) }}
   block:
-    - set_fact:
-        download_dir: "{{ temp_dir }}"
+    # download_dir in the original (only ever used inside this file).
+    - name: Set the download directory
+      ansible.builtin.set_fact:
+        oracle_database_patch_role_download_dir: "{{ temp_dir }}"
 
-    - name: Remove prior {{ temp_dir }}
-      file:
+    - name: Remove the prior staging directory (fixed or explicitly given directory only) {{ temp_dir }}
+      ansible.builtin.file:
         state: absent
         path: "{{ temp_dir }}/"
+      when: not __oracle_database_patch_role_unique
+
+    - name: Check whether the staging directory exists {{ temp_dir }}
+      ansible.builtin.stat:
+        path: "{{ temp_dir }}"
+        follow: false
+        get_checksum: false
+      register: __oracle_database_patch_role_staging_before
+
+    - name: Refuse a per-run staging directory that already exists {{ temp_dir }}
+      ansible.builtin.assert:
+        that: not (__oracle_database_patch_role_staging_before.stat.exists and __oracle_database_patch_role_unique)
+        fail_msg: >-
+          {{ temp_dir }} already exists, but this run ({{ oracle_common_run.id | default('') }}) has not created it yet:
+          refusing to use (or remove) a staging directory another run or another database created.
+        quiet: true
 
     - name: Create {{ temp_dir }}
       ansible.builtin.file:
         path: "{{ temp_dir }}"
         state: directory
-        mode: "{{ script_permission }}"
+        mode: "{{ oracle_common_modes.dir }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
 
-    - name: Download {{ artf_file_name }} from {{ artifactory_repo }} to {{ download_dir }}
+    - name: Record the staging directory created by this run
+      ansible.builtin.set_fact:
+        oracle_database_patch_role_created_paths: >-
+          {{ oracle_database_patch_role_created_paths | default([])
+             + [{'path': temp_dir, 'owner': b_user, 'remove': true}] }}
+      when: not __oracle_database_patch_role_staging_before.stat.exists
+
+    # The repository folder (oracle_common_patch_repo_url, alias artifactory_repo, plus the release folder) is
+    # resolved and checked by oracle_common (tasks/patch_artifact.yml); it is not shown in the task name because
+    # it may carry credentials. The download verifies the repository's TLS certificate (optional CA bundle) and the
+    # bundle's checksum (oracle_common_patch_checksum, required and validated by oracle_common); credentials come from
+    # the Ansible Vault. The task runs with no_log (URL and credentials); the next task reports a failure without them.
+    - name: Download the patch bundle (TLS and checksum verified) {{ artf_file_name }}
       ansible.builtin.get_url:
-        url: '{{ artifactory_repo }}/{{ artf_file_name }}'
-        dest: '{{ download_dir }}/{{ artf_file_name }}'
-        validate_certs: no
-        force_basic_auth: yes
-        mode: "{{ script_permission }}"
+        url: '{{ oracle_common_patch.repo_dir_url }}/{{ artf_file_name }}'
+        dest: '{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}'
+        checksum: "{{ oracle_common_patch_checksum }}"
+        validate_certs: "{{ (oracle_common_patch_validate_certs | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
+        url_username: "{{ oracle_common_patch_repo_username if (oracle_common_patch_repo_username | default('') | length > 0) else omit }}"
+        url_password: "{{ oracle_common_patch_repo_password if (oracle_common_patch_repo_password | default('') | length > 0) else omit }}"
+        force_basic_auth: "{{ (oracle_common_patch_force_basic_auth | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
+        use_proxy: "{{ __oracle_database_patch_role_use_proxy }}"
+        mode: "{{ oracle_common_modes.file }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
         tmp_dest: "{{ temp_dir }}"
-        use_proxy: no
+      # get_url has no ca_path option (ansible-core 2.22): the CA bundle (oracle_common_patch_ca_path) reaches the module
+      # through SSL_CERT_FILE, which OpenSSL reads when the module builds its default TLS context. The bundle is then
+      # trusted in addition to the system CA certificates that get_url always loads.
+      environment: >-
+        {{ ({'https_proxy': oracle_common_patch_proxy, 'HTTPS_PROXY': oracle_common_patch_proxy,
+             'http_proxy': oracle_common_patch_proxy, 'HTTP_PROXY': oracle_common_patch_proxy}
+            if (__oracle_database_patch_role_use_proxy and (oracle_common_patch_proxy | default('') | length > 0)) else {})
+           | combine({'SSL_CERT_FILE': oracle_common_patch_ca_path}
+                     if (oracle_common_patch_ca_path | default('') | length > 0) else {}) }}
+      vars:
+        __oracle_database_patch_role_use_proxy: "{{ (oracle_common_patch_use_proxy | string | lower) in ['true', 'yes', 'on', '1', 'y'] }}"
+      register: __oracle_database_patch_role_download
+      # A failure is reported by the next task without the URL or the credentials (a failed task's error line is
+      # printed even under no_log).
+      failed_when: false
+      no_log: true
 
-    - name: Extract {{ artf_file_name }} into {{ temp_dir }}
+    # Failed: the module raised an error (failed_when_suppressed_exception) or did not report a download ("OK (<n>
+    # bytes)") or an identical existing file. The message is shown with URLs and the password removed; a checksum
+    # mismatch is named explicitly.
+    - name: Check the download of the patch bundle {{ artf_file_name }}
+      ansible.builtin.assert:
+        that:
+          - __oracle_database_patch_role_download.failed_when_suppressed_exception is not defined
+          - (__oracle_database_patch_role_download.msg | default('') | string) is match('OK(?![A-Za-z])|file already exists')
+        fail_msg: >-
+          Download of {{ artf_file_name }} failed (HTTP {{ __oracle_database_patch_role_download.status_code | default('n/a') }}):
+          {{ __oracle_database_patch_role_download.msg | default('unknown error') | string
+             | replace(oracle_common_patch.repo_dir_url | string, '<repository URL>')
+             | replace((oracle_common_patch_repo_password | default('') | string) or '<no password>', '<password>')
+             | regex_replace('[A-Za-z][A-Za-z0-9+.-]*://\S+', '<URL>') | truncate(500, true) }}
+          {{- ' - the checksum does not match oracle_common_patch_checksum: verify the value and the bundle against a trusted source.'
+              if ('checksum' in (__oracle_database_patch_role_download.msg | default('') | string | lower)) else '' }}
+        success_msg: "Downloaded {{ artf_file_name }} (checksum verified)"
+        quiet: true
+
+    - name: Extract the patch bundle {{ artf_file_name }}
       ansible.builtin.unarchive:
-        remote_src: yes
-        src: "{{ download_dir }}/{{ artf_file_name }}"
+        remote_src: true
+        src: "{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}"
         dest: "{{ temp_dir }}"
 
-    - name: Remove {{ download_dir }}/{{ artf_file_name }}
-      file:
+    - name: Remove the downloaded bundle {{ oracle_database_patch_role_download_dir ~ '/' ~ artf_file_name }}
+      ansible.builtin.file:
         state: absent
         path: "{{ item }}"
       loop:
-        - "{{ download_dir }}/{{ artf_file_name }}"
-      ignore_errors: true
+        - "{{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}"
+      # Best effort, as before (the original ignored errors here): a failure is reported below, not hidden.
+      register: __oracle_database_patch_role_bundle_removal
+      failed_when: false
 
-    - name : Find all files in "{{ temp_dir }}"
-      find:
+    - name: Report a downloaded bundle that could not be removed
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: could not remove {{ oracle_database_patch_role_download_dir }}/{{ artf_file_name }}
+          ({{ __oracle_database_patch_role_bundle_removal.results | map(attribute='msg', default='') | select | join('; ') }})
+      # failed_when: false clears 'failed'; a removed (or absent) path reports state absent.
+      when: __oracle_database_patch_role_bundle_removal.results | map(attribute='state', default='') | reject('equalto', 'absent') | list | length > 0
+
+    - name: Find all archives in the staging directory {{ temp_dir }}
+      ansible.builtin.find:
         paths: "{{ temp_dir }}"
         patterns: '*.zip,*.tar.gz'
-      register: output
-    
-    - name: Extract all files into {{ temp_dir }}
+      register: __oracle_database_patch_role_archives
+
+    - name: Extract all archives into the staging directory {{ temp_dir }}
       ansible.builtin.unarchive:
-        remote_src: yes
+        remote_src: true
         src: "{{ item.path }}"
         dest: "{{ temp_dir }}"
-      with_items: "{{ output.files }}"
-      
-    - name: Change Permissions of all files in {{ temp_dir }}
-      file:
+      loop: "{{ __oracle_database_patch_role_archives.files }}"
+
+    # The original made the whole tree 0777. Least privilege instead: owner read/write, group read, nothing for others;
+    # directories and already executable files keep their execute bit (u=rwX,g=rX,o=). The database owner reads the
+    # patch through oracle_common_work_group when it is not the staging owner (Grid layout).
+    - name: Change Permissions of all files in the staging directory {{ temp_dir }}
+      ansible.builtin.file:
         path: "{{ temp_dir }}"
         state: directory
-        recurse: yes
-        mode: "{{ script_permission }}"
+        recurse: true
+        mode: "{{ __oracle_common_staging_tree_mode }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"

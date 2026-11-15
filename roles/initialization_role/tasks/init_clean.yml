@@ -1,28 +1,34 @@
 ---
-- name: Remove {{ remote_script_directory }} if exists
+# Removes the script and output directories of an earlier run, as before, but only those used like the original fixed
+# names (oracle_common_run.script_dir_fixed / output_fixed: oracle_common_unique_work_dirs false, or given explicitly).
+# A generated per-run directory is never removed here. Each directory is removed as the connection user first, then
+# (when that fails) as the database owner, as before.
+- name: Remove the script directory of an earlier run {{ remote_script_directory }}
+  when: oracle_common_run.script_dir_fixed | default(true) | bool
   block:
-    - name: Remove {{ remote_script_directory }} if exists - ansibleUser
+    - name: Remove the script directory as the connection user {{ remote_script_directory }}
       ansible.builtin.file:
         path: "{{ remote_script_directory }}"
         state: absent
   rescue:
-    - name: Remove {{ remote_script_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
-      become: yes
-      become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
+    - name: Remove the script directory as the database owner {{ remote_script_directory }}
+      become: true
+      become_user: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
       ansible.builtin.file:
         path: "{{ remote_script_directory }}"
         state: absent
 
-- name: Remove {{ remote_output_directory }} if exists
+- name: Remove the output directory of an earlier run {{ remote_output_directory }}
+  when: oracle_common_run.output_fixed | default(true) | bool
   block:
-    - name: Remove {{ remote_output_directory }} if exists - ansibleUser
+    - name: Remove the output directory as the connection user {{ remote_output_directory }}
       ansible.builtin.file:
         path: "{{ remote_output_directory }}"
         state: absent
   rescue:
-    - name: Remove {{ remote_output_directory }} if exists - {{sid_server_dict[DATABASE_NAME].dbowner}}
-      become: yes
-      become_user: "{{sid_server_dict[DATABASE_NAME].dbowner}}"
+    - name: Remove the output directory as the database owner {{ remote_output_directory }}
+      become: true
+      become_user: "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
       ansible.builtin.file:
         path: "{{ remote_output_directory }}"
         state: absent

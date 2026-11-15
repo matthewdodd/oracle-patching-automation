@@ -1,46 +1,11 @@
 ---
+# ServiceNow change check. Same interface as before (included without variables from the full patching playbook;
+# its rescue sends the failure card). The check runs in roles/oracle_common (tasks/change_ticket.yml; settings in
+# defaults/main/servicenow.yml) with servicenow.itsm.change_request_info: credentials from the Ansible Vault
+# (vault_snow_instance, vault_snow_user, vault_snow_password; snow_instance, snow_user and snow_password are still
+# accepted), no_log on every task that touches them. override_chg true (boolean or "true") skips the check.
+# The change record TICKET_NUMBER must be in an allowed state (default -2 Scheduled .. -1 Implement).
 - name: Validate ServiceNow Change Ticket
-  block:
-    - debug:
-        - msg: 'The SNOW Ticket # is: {{ TICKET_NUMBER }}'
-        - msg: 'SNOW info is: USER - {{ snow_user }} ; INSTANCE - {{ snow_instance|default("<blank>") }}'
-
-    - name: Retrieve change record state from ServiceNow
-      snow_record_find:
-        username: '{{ snow_user }}'
-        password: '{{ snow_password }}'
-        instance: '{{ snow_instance|default("<blank>") }}'
-        table: change_request
-        query:
-          number: '{{ TICKET_NUMBER }}'
-        return_fields:
-          - number
-          - state
-      register: snow_record_find_result
-      environment:
-        https_proxy: 'http://proxy:8080'
-    - debug:
-        msg: "{{ snow_record_find_result }}"
-    
-    - debug:
-        msg: 
-          - "Possible Change Ticket States:"
-          - "State     | Value"
-          - "----------|------"
-          - "New       | -5"
-          - "Assess    | -4"
-          - "Authorize | -3"
-          - "Scheduled | -2"
-          - "Implement | -1"
-          - "Review    |  0"
-          - "Closed    |  3"
-          - "Cancelled |  4"
-    - debug: 
-        msg: "Change record {{ TICKET_NUMBER }} state is {{ snow_record_find_result.record[0].state }}"
-  
-    - name: Assert that the change record is in the right state
-      ansible.builtin.assert:
-        that:
-          - snow_record_find_result.record[0].state|int >= -2
-          - snow_record_find_result.record[0].state|int <= -1
-        msg: change record {{ TICKET_NUMBER }} is not in the required state
+  ansible.builtin.include_role:
+    name: oracle_common
+    tasks_from: change_ticket

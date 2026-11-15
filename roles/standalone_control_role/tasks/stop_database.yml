@@ -1,27 +1,64 @@
 ---
-### This script stops the database
-
-- name: copy stop_database_script to {{ server_name }}
-  copy:
-    src: "{{ stop_database_script }}"
-    dest: "{{ remote_script_directory }}/{{ stop_database_script }}"
-    mode: "{{script_permission}}"
-    force: yes
-  delegate_to: "{{ server_name }}"
+### This script stops the database, then verifies it is really down before anything else happens (the patch is
+### applied next). A failed shutdown fails the task (it used to be ignored, so the patch could be applied to a home
+### whose database was still running).
 
 - name: Shutdown oracle database {{ ORACLE_SID }}
-  shell: >
-    {{ remote_script_directory }}/{{ stop_database_script }} stop {{ ORACLE_SID }} 
-#    2>&1 | tee {{ remote_output_directory }}/log.{{ stop_database_script }}.`date +"%Y.%m.%d"`
-  args:
-    executable: /usr/bin/bash
+  ansible.builtin.command:
+    argv:
+      - "{{ remote_script_directory }}/{{ standalone_control_role_stop_database_script }}"
+      - stop
+      - "{{ ORACLE_SID }}"
   delegate_to: "{{ server_name }}"
-  register: db_stop_status
-  ignore_errors: yes
-  become: yes
-  become_user: "{{ sid_server_dict[ORACLE_SID].dbowner }}"
-  become_method: sudo
+  # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
+  environment: "{{ standalone_control_role_environment }}"
+  register: standalone_control_role_db_stop_status
+  changed_when: true
+  failed_when: false
+  become: true
+  become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
 
-- name: print Shutdown db status for {{ ORACLE_SID }}
-  debug:
-    msg: "{{ db_stop_status.stdout_lines }}"
+- name: Print Shutdown db status for {{ ORACLE_SID }}
+  ansible.builtin.debug:
+    msg: "{{ standalone_control_role_db_stop_status.stdout_lines | default([]) + standalone_control_role_db_stop_status.stderr_lines | default([]) }}"
+
+- name: Fail when the database did not shut down {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that: standalone_control_role_db_stop_status.rc | default(1) == 0
+    fail_msg: >-
+      The shutdown of database {{ ORACLE_SID }} failed ({{ standalone_control_role_stop_database_script }} stop exited with
+      {{ standalone_control_role_db_stop_status.rc | default('no exit code') }}); nothing is patched while it may still be
+      running. See the output above.
+    quiet: true
+
+# The instance is down only when no ora_pmon_<SID> process is left (exact process name, compared without case).
+- name: Verify the database is down {{ ORACLE_SID }}
+  ansible.builtin.command:
+    argv: [ps, -e, -o, args=]
+  delegate_to: "{{ server_name }}"
+  register: standalone_control_role_db_stop_ps
+  changed_when: false
+  check_mode: false
+  until: >-
+    standalone_control_role_db_stop_ps.rc | default(1) == 0
+    and standalone_control_role_db_stop_ps.stdout_lines | select('match', __standalone_control_role_re_pmon) | list | length == 0
+  retries: "{{ standalone_control_role_shutdown_verify_retries | int }}"
+  delay: "{{ standalone_control_role_shutdown_verify_delay | int }}"
+  failed_when: false
+  vars:
+    __standalone_control_role_re_pmon: '(?i)\A\s*ora_pmon_{{ ORACLE_SID | regex_escape }}\s*\Z'
+
+- name: Fail when the database is still running {{ ORACLE_SID }}
+  ansible.builtin.assert:
+    that:
+      - standalone_control_role_db_stop_ps.rc | default(1) == 0
+      - standalone_control_role_db_stop_ps.stdout_lines | select('match', __standalone_control_role_re_pmon) | list | length == 0
+    fail_msg: >-
+      {{ ('ora_pmon_' ~ ORACLE_SID ~ ' is still running ' ~ ((standalone_control_role_shutdown_verify_retries | int)
+          * (standalone_control_role_shutdown_verify_delay | int)) ~ ' s after the shutdown')
+         if (standalone_control_role_db_stop_ps.rc | default(1) == 0)
+         else ('could not list the processes to verify the shutdown (' ~ (standalone_control_role_db_stop_ps.msg | default('ps failed')) ~ ')') }}:
+      the database {{ ORACLE_SID }} is not verified down, so nothing is patched.
+    success_msg: "The database {{ ORACLE_SID }} is down (no ora_pmon_{{ ORACLE_SID }} process)."
+  vars:
+    __standalone_control_role_re_pmon: '(?i)\A\s*ora_pmon_{{ ORACLE_SID | regex_escape }}\s*\Z'

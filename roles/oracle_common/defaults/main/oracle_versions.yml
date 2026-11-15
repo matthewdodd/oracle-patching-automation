@@ -1,0 +1,12 @@
+---
+# Supported Oracle Database versions: one file per version in vars/oracle_versions/ (12.1, 12.2, 19, 23ai,
+# 26ai). Adding a version means adding one file there.
+#
+# Per-environment overrides of any per-version value, merged over the files, e.g.
+#   oracle_common_oracle_version_overrides:
+#     "26ai": {artifact_dir: "23.26.0", datapatch_startup_mode: normal}
+oracle_common_oracle_version_overrides: {}
+# Use this version entry (a file name of vars/oracle_versions/, e.g. 26ai) instead of detecting it from the
+# database version string; the detected version must still match that entry's accept_regex. Needed to tell
+# 26ai from 23ai while the detection only reports 23.0.0.0.0. Empty: detect. Alias: oracle_patch_db_version.
+oracle_common_db_version: "{{ oracle_patch_db_version | default('') }}"
