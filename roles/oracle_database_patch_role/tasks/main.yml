@@ -8,7 +8,8 @@
 # Each step runs asynchronously (tasks/patch_step.yml: oracle_common_patch_timeout, polled every
 # oracle_common_patch_poll_delay seconds up to oracle_common_patch_poll_retries times).
 
-# Original fact names. The script mode comes from oracle_common (oracle_common_modes.script; 0777 is not allowed).
+# Original fact names. The script and directory modes come from oracle_common (oracle_common_modes.script and .dir,
+# default 0750; 0777 is not allowed).
 - name: Set the database and host facts
   ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix] var-naming[pattern] - original fact names, kept for compatibility
     ORACLE_SID: "{{ DATABASE_NAME }}"
@@ -26,6 +27,8 @@
         src: "{{ role_path }}/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"
         mode: "{{ oracle_common_modes.script }}"
+        directory_mode: "{{ oracle_common_modes.dir }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
 
 - name: Apply Patch for {{ DATABASE_NAME }}
   ansible.builtin.include_tasks: patch_step.yml

@@ -1,14 +1,18 @@
 ---
-# Per-database working directories on the target. Defaults reproduce the original paths
-# (/tmp/ora_ansible_scripts_<SID> and /tmp/ora_db_patch_<SID>). The original names remote_script_directory
-# and remote_output_directory are accepted as aliases.
+# Per-database working directories on the target. The original names remote_script_directory and
+# remote_output_directory are accepted as aliases (used exactly as given, e.g. the original
+# /tmp/ora_ansible_scripts_<SID>).
 #
-# Base directory of both working directories.
-oracle_common_staging_base: /tmp
+# Base directory of both working directories. The original base was the world-writable /tmp; the default is now a
+# dedicated directory below the Oracle software base of the Oracle layout (oracle_common_patch_base_dir_oracle, default
+# /u01/oracle, which the patch staging already uses), created by the database owner with oracle_common_dir_mode (0750)
+# when it does not exist. The database owner must be able to create it (or it must exist, owned by the database
+# owner). A world-writable base without the sticky bit is refused; /tmp (world-writable, sticky) still works when set
+# explicitly, with a warning (initialization_role tasks/run_dir.yml).
+oracle_common_staging_base: "{{ oracle_common_patch_base_dir_oracle }}/ansible_patch_work"
 # Scripts copied to the host.
 oracle_common_remote_script_directory: >-
   {{ remote_script_directory | default(oracle_common_staging_base ~ '/ora_ansible_scripts_' ~ (DATABASE_NAME | default(''))) }}
-# Logs and script output. NOTE: the bundled database_patch.bash and database_version.bash still write their
-# output to /tmp/ora_db_patch_<SID>; keep this default until those scripts take the directory as an input.
+# Logs and script output (passed to the bundled scripts as ORA_WORK_DIR).
 oracle_common_remote_output_directory: >-
   {{ remote_output_directory | default(oracle_common_staging_base ~ '/ora_db_patch_' ~ (DATABASE_NAME | default(''))) }}

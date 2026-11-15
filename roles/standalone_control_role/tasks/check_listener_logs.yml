@@ -1,9 +1,10 @@
 ---
 ## This script copies the check_listener_logs.bash script to server and checks the listener logs for errors and warnings.
-##
+## Logged as before (<remote_output_directory>/log.<check_listenerLogs_script>.<YYYY.MM.DD>); no shell interpolation.
 
-- name: copy check_listener_logs script to {{ server_name }}
-  copy:
+- name: copy check_listener_logs script to {{ server_name }}  # noqa: name[casing] - original task name
+  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
+  copy:  # noqa: fqcn[action-core]
     src: "{{ check_listenerLogs_script }}"
     dest: "{{ remote_script_directory }}/{{ check_listenerLogs_script }}"
     mode: "{{ oracle_common_modes.script }}"
@@ -13,30 +14,30 @@
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 
+# The listener names (dbListener, pdbListener) follow ORACLE_SID as before; an empty one is left out, as the original
+# shell's word splitting did.
 - name: Checking listener logs for errors for {{ ORACLE_SID }}
-  vars:
-    listenerA: "{{ sid_server_dict[standalone_control_role_sid_key].dbListener }}"
-    listenerB: "{{ sid_server_dict[standalone_control_role_sid_key].pdbListener }}"
-  shell: >
-    {{remote_script_directory}}/{{check_listenerLogs_script}}
-    {{ORACLE_SID}} {{listenerA}} {{listenerB}}
-    &> >(tee {{ remote_output_directory }}/log.{{ check_listenerLogs_script }}.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
+  ansible.builtin.command:
+    argv: >-
+      {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'check_listener_logs',
+          remote_output_directory ~ '/log.' ~ check_listenerLogs_script,
+          remote_script_directory ~ '/' ~ check_listenerLogs_script, ORACLE_SID]
+         + (sid_server_dict[standalone_control_role_sid_key].dbListener | string).split()
+         + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
   environment: "{{ standalone_control_role_environment }}"
-  register: check_listenerLogs_status
+  register: check_listenerLogs_status  # noqa: var-naming[pattern] - original register name
+  changed_when: false
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: sudo
   failed_when: check_listenerLogs_status.rc != 4 and check_listenerLogs_status.rc != 0
 
-- name: print check_listenerLogs status for {{ ORACLE_SID }}
-  debug:
+- name: print check_listenerLogs status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+  ansible.builtin.debug:
     msg: "{{ check_listenerLogs_status.stdout_lines }}"
   failed_when: check_listenerLogs_status.rc == 4
   ignore_errors: true

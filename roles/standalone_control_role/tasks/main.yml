@@ -6,7 +6,8 @@
         msg:
           - "Server Name: {{ server_name }}"
           - "Database Name : {{ ORACLE_SID }}"
-          - "Time: {{ lookup('pipe','date +%Y-%m-%d--%H.%M.%S') }}"
+          # Controller time, as before, without running a shell on the controller (lookup('pipe', 'date ...')).
+          - "Time: {{ now(fmt='%Y-%m-%d--%H.%M.%S') }}"
 
     - name: Verify inputs entered
       fail:
@@ -32,23 +33,35 @@
         PDB_NAME: "{{ sid_server_dict[standalone_control_role_sid_key].pdb }}"
 
     - block:
+        # No shell: the VIP is a separate argument, so it can never run a command (and one starting with '-' is
+        # refused instead of being read as a ping option).
+        - name: Check that the database VIP is not an option
+          ansible.builtin.assert:
+            that: not ((sid_server_dict[standalone_control_role_sid_key].dbvip | string) is match('\A-'))
+            fail_msg: "dbvip of {{ ORACLE_SID }} must be a host name or address, not an option"
+            quiet: true
+
         - name: Checking if database VIP is pingable
-          shell: ping -c2 {{ sid_server_dict[standalone_control_role_sid_key].dbvip }}
+          ansible.builtin.command:
+            argv: [ping, -c2, "{{ sid_server_dict[standalone_control_role_sid_key].dbvip }}"]
           register: vip_ping_log1
+          changed_when: false
 
         - name: Show database VIP ping status
           debug:
             msg: "{{ vip_ping_log1.stdout_lines }}"
 
+    # oracle_common_dir_mode (default 0750) and oracle_common_work_group, like the other working directories (recurse
+    # dropped: the missing parents are created anyway, and a recursive mode would change the logs inside).
     - name: Create remote log output directory if not exist
-      file:
+      ansible.builtin.file:
         state: directory
-        recurse: true
         path: "{{ remote_output_directory }}"
+        mode: "{{ (oracle_common_modes | default({})).dir | default('0750') }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
       delegate_to: "{{ server_name }}"
       become: true
       become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-      become_method: sudo
 
 - name: Startup Database
   block:

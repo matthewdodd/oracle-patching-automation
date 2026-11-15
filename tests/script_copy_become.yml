@@ -4,8 +4,8 @@
 #   ansible-playbook -i localhost, -c local tests/script_copy_become.yml
 #
 # initialization_role creates remote_script_directory as sid_server_dict[SID].dbowner with
-# oracle_common_modes.script. That mode used to be 0777, so the copy tasks could run as the SSH user. 0777 is no
-# longer allowed (the default is 0755), so a copy made as the SSH user fails with "Destination ... not writable"
+# oracle_common_modes (directory mode). That mode used to be 0777, so the copy tasks could run as the SSH user. 0777 is no
+# longer allowed (the default is 0750), so a copy made as the SSH user fails with "Destination ... not writable"
 # whenever the SSH user is neither root nor the database owner. Each copy task (or its enclosing block) must
 # therefore become the database owner.
 - name: Script copy privilege regression test

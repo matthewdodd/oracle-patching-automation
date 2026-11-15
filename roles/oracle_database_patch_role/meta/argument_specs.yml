@@ -13,7 +13,11 @@ argument_specs:
       - Each step may run for oracle_common_patch_timeout seconds (alias oracle_patch_apply_timeout, default 14400)
         and is polled every oracle_common_patch_poll_delay seconds up to oracle_common_patch_poll_retries times.
       - Uses the facts set by initialization_role (remote_script_directory, patch_folder_name, oracle_common_run,
-        oracle_common_script_env) and oracle_common_modes.script.
+        oracle_common_script_env) and oracle_common_modes (script and directory modes, default 0750).
+      - The prerequisite step (tasks/run_prereq.yml -> copy_files_to_server.yml) downloads the bundle with TLS verification
+        (oracle_common_patch_validate_certs, oracle_common_patch_ca_path), the required checksum
+        (oracle_common_patch_checksum) and optional Vault credentials (oracle_common_patch_repo_username / _password),
+        under no_log, and sets the extracted tree to u=rwX,g=rX,o= (the original 0777 is gone).
     options:
       DATABASE_NAME:
         type: str

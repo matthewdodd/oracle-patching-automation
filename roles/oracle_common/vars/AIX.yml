@@ -14,3 +14,9 @@ __oracle_common_package_query_regex: '(?m)^[^#:\s][^:]*:([^:]+):'
 #   bos.adt.base, bos.adt.lib, bos.adt.libm, bos.perf.libperfstat, bos.perf.perfstat, bos.perf.proctools,
 #   rsct.basic.rte, rsct.compat.clients.rte, xlC.aix61.rte, xlC.rte
 __oracle_common_prereq_packages: []
+# Group membership (initialization_role tasks/group_membership.yml), as argument vectors. Add: <command...> <member>
+# <group> (the original command). Members: <command...> <group>; the regex captures the comma-separated members of
+# "<group> users=a,b,c" (lsgroup also covers LDAP groups when the registry is configured).
+__oracle_common_group_add_command: [/usr/bin/chgrpmem, -m, +]
+__oracle_common_group_members_command: [/usr/sbin/lsgroup, -a, users]
+__oracle_common_group_members_regex: 'users=(\S*)'

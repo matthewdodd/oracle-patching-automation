@@ -23,9 +23,11 @@ argument_specs:
         oracle_common_patch_base_dir (alias patch_folder_prefix; selected by oracle_common_is_grid_layout),
         oracle_common_patch_owner (alias b_user; selected by oracle_common_is_grid_layout).
       - Per-OS values from vars/<os>.yml (oracle_common_artifact_platform, oracle_common_package_manager,
-        oracle_common_package_query_command, oracle_common_package_query_regex, oracle_common_prereq_packages)
-        can be overridden per host or group; they are not listed because they are only known after the OS
-        variables are loaded.
+        oracle_common_package_query_command, oracle_common_package_query_regex, oracle_common_prereq_packages, and the
+        group membership commands oracle_common_group_add_command (argument vector called as <command...> <member>
+        <group>; gpasswd --add on Linux, chgrpmem -m + on AIX), oracle_common_group_members_command (<command...> <group>;
+        getent group / lsgroup -a users) and oracle_common_group_members_regex) can be overridden per host or group; they
+        are not listed because they are only known after the OS variables are loaded.
     options:
       target:
         type: str
@@ -114,16 +116,67 @@ argument_specs:
         description: Owner of the staged patch for the Grid layout.
       oracle_common_staging_base:
         type: str
-        default: /tmp
-        description: Base of the per-database script and output directories.
+        description:
+          - Base of the per-database script and output directories. Default <oracle_common_patch_base_dir_oracle>/ansible_patch_work
+            (a dedicated directory under the Oracle base, created by the database owner with oracle_common_dir_mode), no
+            longer the world-writable /tmp. /tmp still works when set explicitly (with a warning); a world-writable parent
+            without the sticky bit is refused.
       oracle_common_script_permission:
         type: raw
         description:
-          - Mode of the copied scripts and working directories. Default "0755". Alias script_permission.
+          - Mode of the copied scripts. Default "0750". Alias script_permission.
           - Group- or world-writable modes (such as 0777) are rejected.
       script_permission:
         type: raw
         description: Original name of oracle_common_script_permission, still accepted (0777 is no longer allowed).
+      oracle_common_dir_mode:
+        type: raw
+        description: Mode of the working, output and staging directories. Default "0750". Group- or world-writable modes are rejected.
+      oracle_common_file_mode:
+        type: raw
+        description: Mode of the downloaded patch bundle. Default "0640". Group- or world-writable modes are rejected.
+      oracle_common_work_group:
+        type: str
+        default: ""
+        description:
+          - Group of the directories and files created on the target. Empty - the creating user's primary group.
+          - Set it to the group the database owner and the patch staging owner share when they are different users (Grid layout).
+      oracle_common_patch_validate_certs:
+        type: bool
+        default: true
+        description: Verify the TLS certificate of the patch repository. false is an opt-in (the checksum is still verified).
+      oracle_common_patch_ca_path:
+        type: str
+        default: ""
+        description: Optional CA bundle (PEM, on the target) used to verify the patch repository.
+      oracle_common_patch_use_proxy:
+        type: bool
+        default: false
+        description: Use a proxy for the patch download (the original did not).
+      oracle_common_patch_proxy:
+        type: str
+        default: ""
+        description: Optional proxy URL for the patch download when oracle_common_patch_use_proxy is true.
+      oracle_common_patch_repo_username:
+        type: str
+        no_log: true
+        description: Patch repository user for HTTP basic authentication. Default vault_patch_repo_username (Ansible Vault).
+      oracle_common_patch_repo_password:
+        type: str
+        no_log: true
+        description: Patch repository password. Default vault_patch_repo_password (Ansible Vault). Set both or neither.
+      vault_patch_repo_username:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the patch repository user.
+      vault_patch_repo_password:
+        type: str
+        no_log: true
+        description: Ansible Vault variable holding the patch repository password.
+      oracle_common_patch_force_basic_auth:
+        type: bool
+        default: true
+        description: Send the repository credentials with the first request (the original force_basic_auth).
       oracle_common_env_dir:
         type: str
         default: /local
@@ -135,6 +188,12 @@ argument_specs:
       oracle_common_group_name:
         type: str
         description: Required while oracle_common_manage_group_membership is true. Alias GROUP_NAME.
+      oracle_common_group_membership_become_user:
+        type: str
+        default: root
+        description: >-
+          User the group membership change runs as, through Ansible become (the become method comes from the inventory;
+          no raw sudo).
       GROUP_NAME:
         type: str
         description: Original name of oracle_common_group_name, still accepted.

@@ -15,3 +15,9 @@ __standalone_control_role_sid_key: >-
   {{ ORACLE_SID if ORACLE_SID in d
      else (given if (given | length > 0 and given in d)
            else ((ns.keys | first) if (ns.keys | length == 1) else '')) }}
+
+# Static bash script that runs a control script and logs its output, replacing the original shell commands
+# `<script> <args> &> >(tee <log>.$(date +%Y.%m.%d))`. Called as: bash -c <this> <name> <log prefix> <script> <args...>;
+# every value is a positional parameter (never interpolated into the script, so no value can run a command). stdout and
+# stderr go to the task output and to <log prefix>.<YYYY.MM.DD>; the exit code is the script's own, as before.
+__standalone_control_role_logged_run: 'log=$1; shift; "$@" 2>&1 | tee "$log.$(date +%Y.%m.%d)"; exit "${PIPESTATUS[0]}"'

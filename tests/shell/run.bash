@@ -982,6 +982,47 @@ t_inventory_read_only() {
 # standalone_control_role scripts
 ################################################################################
 
+# Security (U3): an environment file that puts "." or an empty entry into PATH must not make the scripts run a program
+# from the current directory. plant_tools writes a fake ps and sqlplus into $C/cwd that only record that they ran.
+plant_tools() {
+  mkdir -p -- "$C/cwd"
+  local tool
+  for tool in ps sqlplus lsnrctl; do
+    # shellcheck disable=SC2016  # $STUB_STATE is expanded by the planted script, not here
+    printf '#!/bin/sh\n: >"$STUB_STATE/planted_%s_ran"\nexit 0\n' "$tool" >"$C/cwd/$tool"
+    chmod 0750 "$C/cwd/$tool"
+  done
+  # shellcheck disable=SC2016  # $PATH is expanded when the environment file is sourced
+  printf '%s\n' 'export PATH=.:$PATH::' >>"$C/local/ORCL.env"
+}
+
+t_env_path_dot_ignored_ctl() {
+  plant_tools
+  cd -- "$C/cwd" || return
+  ctl database_ctl.bash start ORCL
+  assert_rc 0
+  assert_out_contains "Database ORCL started successfully"
+  assert_not_exists "$S/planted_ps_ran"
+  assert_not_exists "$S/planted_sqlplus_ran"
+  ctl listener_ctl.bash start ORCL LISTENER_ORCL
+  assert_not_exists "$S/planted_lsnrctl_ran"
+}
+
+t_env_path_dot_ignored_patch() {
+  plant_tools
+  echo OPEN >"$S/instance"
+  cd -- "$C/cwd" || return
+  patch ORCL status "$C/patch"
+  assert_rc 0
+  assert_out_contains "$DB_ID not found in database, we can proceed to apply"
+  assert_not_exists "$S/planted_sqlplus_ran"
+  assert_not_exists "$S/planted_ps_ran"
+  echo 19.0.0.0.0 >"$S/version"
+  run bash "$PATCH_DIR/database_version.bash" ORCL
+  assert_rc 0
+  assert_not_exists "$S/planted_sqlplus_ran"
+}
+
 t_database_ctl_start_stop() {
   ctl database_ctl.bash start ORCL
   assert_rc 0

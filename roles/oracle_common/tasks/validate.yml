@@ -42,13 +42,34 @@
           'oracle_common_patch_base_dir_grid': oracle_common_patch_base_dir_grid,
           'oracle_common_patch_base_dir (alias patch_folder_prefix)': oracle_common_patch_base_dir}
          | combine({'oracle_common_patch_staging_dir (alias patch_folder_name)': oracle_common_patch_staging_dir}
-                   if (oracle_common_patch_staging_dir | string | length > 0) else {}) }}
+                   if (oracle_common_patch_staging_dir | string | length > 0) else {})
+         | combine({'oracle_common_patch_ca_path': oracle_common_patch_ca_path}
+                   if (oracle_common_patch_ca_path | string | length > 0) else {}) }}
     # Names of the normalised modes that are not a plain octal mode, or that grant group or world write.
     __oracle_common_bad_modes: >-
       {{ ((oracle_common_modes | dict2items | rejectattr('value', 'match', __oracle_common_re_octal_mode) | map(attribute='key') | list)
           + (oracle_common_modes | dict2items | selectattr('value', 'match', __oracle_common_re_mode_world_writable) | map(attribute='key') | list)
           + (oracle_common_modes | dict2items | selectattr('value', 'match', __oracle_common_re_mode_group_writable) | map(attribute='key') | list))
          | unique | sort }}
+    # Toggles: a boolean, or one of the legacy strings ("true", "no", ...). Names of the ones that are neither.
+    __oracle_common_bool_inputs:
+      oracle_common_manage_group_membership: "{{ oracle_common_manage_group_membership }}"
+      oracle_common_check_packages: "{{ oracle_common_check_packages }}"
+      oracle_common_patch_repo_version_subdir: "{{ oracle_common_patch_repo_version_subdir }}"
+      oracle_common_patch_repo_version_check: "{{ oracle_common_patch_repo_version_check }}"
+      oracle_common_patch_repo_allow_http: "{{ oracle_common_patch_repo_allow_http }}"
+      oracle_common_ticket_required: "{{ oracle_common_ticket_required }}"
+      oracle_common_patch_validate_certs: "{{ oracle_common_patch_validate_certs }}"
+      oracle_common_patch_use_proxy: "{{ oracle_common_patch_use_proxy }}"
+      oracle_common_patch_force_basic_auth: "{{ oracle_common_patch_force_basic_auth }}"
+    __oracle_common_bad_bools: >-
+      {%- set ns = namespace(out=[]) -%}
+      {%- for k, v in __oracle_common_bool_inputs.items()
+            if not (v is boolean or (v | string | lower) in __oracle_common_bool_strings) -%}
+      {%-   set ns.out = ns.out + [k] -%}
+      {%- endfor -%}
+      {{ ns.out }}
+    __oracle_common_group_commands: "{{ [oracle_common_group_add_command, oracle_common_group_members_command] }}"
     __oracle_common_allow_http: "{{ (oracle_common_patch_repo_allow_http | string | lower) in __oracle_common_true_strings }}"
     __oracle_common_repo_url_re: "{{ __oracle_common_re_http_url if __oracle_common_allow_http else __oracle_common_re_https_url }}"
     # Every oracle_common_* setting (defaults, inventory, extra vars, and the aliases they read), as text.
@@ -115,14 +136,39 @@
         msg: >-
           oracle_common_patch_file_name (aliases oracle_patch_file_name, patch_file_name): must be a plain file name;
           got '{{ oracle_common_patch_file_name }}'
+      - failed: "{{ __oracle_common_bad_bools | length > 0 }}"
+        msg: "{{ __oracle_common_bad_bools | join(', ') }}: must be true or false"
       - failed: >-
-          {{ [oracle_common_manage_group_membership, oracle_common_check_packages, oracle_common_patch_repo_version_subdir,
-              oracle_common_patch_repo_version_check, oracle_common_patch_repo_allow_http, oracle_common_ticket_required]
-             | reject('boolean') | map('string') | map('lower') | reject('in', __oracle_common_bool_strings) | list | length > 0 }}
+          {{ (oracle_common_work_group | string | length > 0)
+             and not ((oracle_common_work_group | string) is match(__oracle_common_re_posix_name)) }}
         msg: >-
-          oracle_common_manage_group_membership, oracle_common_check_packages, oracle_common_patch_repo_version_subdir,
-          oracle_common_patch_repo_version_check, oracle_common_patch_repo_allow_http, oracle_common_ticket_required:
-          must be true or false
+          oracle_common_work_group: must be empty (the creating user's primary group) or a POSIX group name; got
+          '{{ oracle_common_work_group }}'
+      - failed: "{{ not ((oracle_common_group_membership_become_user | string) is match(__oracle_common_re_posix_name)) }}"
+        msg: >-
+          oracle_common_group_membership_become_user: must be a POSIX user name (default root); got
+          '{{ oracle_common_group_membership_become_user }}'
+      - failed: >-
+          {{ ((oracle_common_manage_group_membership | string | lower) in __oracle_common_true_strings)
+             and ((__oracle_common_group_commands | select('string') | list | length > 0)
+                  or (__oracle_common_group_commands | reject('sequence') | list | length > 0)
+                  or (__oracle_common_group_commands | map('length') | select('equalto', 0) | list | length > 0)
+                  or (__oracle_common_group_commands | map('first') | map('string')
+                      | reject('match', __oracle_common_re_abs_path) | list | length > 0)
+                  or (oracle_common_group_members_regex | string | length == 0)) }}
+        msg: >-
+          oracle_common_group_add_command, oracle_common_group_members_command: must be lists (argument vectors) whose
+          first element is an absolute path, and oracle_common_group_members_regex a regular expression
+      - failed: >-
+          {{ (oracle_common_patch_proxy | string | length > 0)
+             and not ((oracle_common_patch_proxy | string) is match(__oracle_common_re_http_url)) }}
+        msg: "oracle_common_patch_proxy: must be empty or an http(s) proxy URL (value not shown)"
+      - failed: >-
+          {{ ((oracle_common_patch_repo_username | string | length > 0) != (oracle_common_patch_repo_password | string | length > 0))
+             or not ((oracle_common_patch_repo_username | string) is match('\A[^:\s]*\Z')) }}
+        msg: >-
+          oracle_common_patch_repo_username, oracle_common_patch_repo_password (vault_patch_repo_username,
+          vault_patch_repo_password): set both or neither; the user name must not contain ':' or whitespace (values not shown)
       - failed: "{{ oracle_common_oracle_version_overrides is not mapping }}"
         msg: "oracle_common_oracle_version_overrides: must be a dictionary keyed by version (e.g. {\"26ai\": {artifact_dir: 26.0.0}})"
       - failed: "{{ __oracle_common_placeholder_names | length > 0 }}"
@@ -137,6 +183,13 @@
     fail_msg: >-
       Invalid or missing inputs: {{ (__oracle_common_job_errors + __oracle_common_config_errors) | join(' | ') }}
     success_msg: "The inputs and the configuration are valid"
+
+- name: Warn about downloads without TLS certificate verification
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: oracle_common_patch_validate_certs is false: the TLS certificate of the patch repository is not verified
+      (the bundle's checksum still is). Prefer oracle_common_patch_ca_path with the repository's CA.
+  when: (oracle_common_patch_validate_certs | string | lower) not in __oracle_common_true_strings
 
 - name: Warn about plain http downloads
   ansible.builtin.debug:

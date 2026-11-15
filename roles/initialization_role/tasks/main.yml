@@ -3,7 +3,7 @@
 #   1. Validate the patch scope and choose this run's working directories (oracle_common preflight_work_dirs.yml:
 #      oracle_common_run, oracle_common_script_env). With oracle_common_unique_work_dirs (default true) every run has
 #      its own script, output and staging directories, so it never touches another run's or another database's files.
-#   2. Package check, database owner check (every running database in scope), group membership.
+#   2. Package check, database owner check (every running database in scope), group membership (become, no raw sudo).
 #   3. Create the working directories (refusing a generated per-run directory that already exists, recording each so
 #      the cleanup removes only what this run created; fixed or explicitly given directories are removed and
 #      re-created, as before), stage the scripts, detect the database version and resolve the patch bundle.
@@ -49,13 +49,18 @@
   loop_control:
     loop_var: __initialization_role_sid
 
+# The database owner and the patch staging owner (oracle_common_patch_owner, the original b_user) join
+# oracle_common_group_name, once each (the original included this task file twice and, when both were the same user,
+# ran it twice for that user). Before the working and staging directories are created, so a shared
+# oracle_common_work_group can already be applied to them.
 - name: Add member to group
   when: oracle_common_manage_group_membership | bool
   block:
     - name: Add member to group
       ansible.builtin.include_tasks: group_membership.yml
-      loop:
-        - "{{ sid_server_dict[DATABASE_NAME].dbowner }}"
+      loop: "{{ [sid_server_dict[DATABASE_NAME].dbowner, oracle_common_patch_owner] | unique }}"
+      loop_control:
+        loop_var: __initialization_role_member
 
 - name: Run init
   become: true
@@ -76,6 +81,8 @@
         src: "{{ role_path }}/../oracle_database_patch_role/files/"
         dest: "{{ remote_script_directory }}/oracle_database_patch_role"
         mode: "{{ oracle_common_modes.script }}"
+        directory_mode: "{{ oracle_common_modes.dir }}"
+        group: "{{ oracle_common_work_group if (oracle_common_work_group | default('') | length > 0) else omit }}"
 
     # The working directory of DATABASE_NAME first (the others are inside it). Logs and script output are kept after
     # the run, as before.
@@ -153,11 +160,3 @@
       ansible.builtin.include_role:
         name: oracle_common
         tasks_from: preflight_script_env
-
-- name: Add member to group
-  when: oracle_common_manage_group_membership | bool
-  block:
-    - name: Add member to group
-      ansible.builtin.include_tasks: group_membership.yml
-      loop:
-        - "{{ b_user }}"

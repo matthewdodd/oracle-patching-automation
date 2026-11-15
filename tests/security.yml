@@ -1,0 +1,234 @@
+---
+# Security regression test (U3). Runs on the controller only, reads the repository files as data and changes nothing.
+# Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/security.yml
+#
+# Every task of the playbooks, the included task files and every role task file is walked (blocks, rescue and always
+# included) and checked:
+#   1. no shell: no shell module, and raw only as a static command without variables (the shell features that were
+#      needed run as a static bash script with the values as positional parameters);
+#   2. become instead of sudo: no become_method in code (it comes from the inventory) and no sudo in a command;
+#   3. a command whose argv holds a literal '$' sets expand_argument_vars: false (otherwise the module expands it);
+#   4. least privilege: no 0777 mode anywhere (YAML tasks, role defaults and the bundled scripts), directories created
+#      with oracle_common_modes.dir, the download with oracle_common_modes.file;
+#   5. TLS and checksum: every get_url verifies certificates (templated toggle, never a literal false), requires the
+#      checksum, takes its credentials from variables and runs with no_log; no lookup('pipe') on the controller;
+#   6. ansible.cfg keeps host key checking on and does not enable world-readable temporary files;
+#   7. the defaults: the working directory base is not /tmp, every mode is least privilege.
+- name: Security regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sec_root: "{{ playbook_dir | dirname }}"
+    sec_shell_modules: [shell, ansible.builtin.shell, ansible.legacy.shell]
+    # raw is allowed only as a static command (no variables): oracle_common tasks/guard.yml reads the OS release before
+    # Python can be used.
+    sec_raw_modules: [raw, ansible.builtin.raw, ansible.legacy.raw]
+    sec_command_modules: [command, ansible.builtin.command, ansible.legacy.command]
+    sec_get_url_modules: [get_url, ansible.builtin.get_url, ansible.legacy.get_url]
+    sec_file_modules: [file, ansible.builtin.file, ansible.legacy.file]
+    # A mode of 0777 (or 777) set by a task, a role default or a script (chmod).
+    sec_re_777: '(?m)^[^#\n]*(?:\bmode\s*[:=]\s*["'']?0?777\b|chmod\s+(?:-R\s+)?0?777\b)'
+  tasks:
+    - name: Find the playbooks, role files, inventory example and scripts
+      ansible.builtin.find:
+        paths: "{{ sec_root ~ '/' ~ item.dir }}"
+        patterns: "{{ item.pattern }}"
+        recurse: "{{ item.recurse }}"
+        depth: "{{ item.depth }}"
+      loop:
+        - {key: playbooks, dir: ".", pattern: "*.yml", recurse: false, depth: 1}
+        - {key: roles_yaml, dir: roles, pattern: "*.yml", recurse: true, depth: 5}
+        - {key: inventory, dir: inventory/example, pattern: "*.yml", recurse: true, depth: 5}
+        - {key: scripts, dir: roles, pattern: "*.bash", recurse: true, depth: 3}
+      loop_control:
+        label: "{{ item.key }}"
+      register: sec_found
+
+    - name: Group the files
+      ansible.builtin.set_fact:
+        sec_yaml_files: "{{ (sec_playbooks + sec_role_tasks) | sort }}"
+        sec_all_yaml_files: "{{ (sec_playbooks + sec_roles_yaml + sec_inventory) | sort }}"
+        sec_script_files: "{{ sec_found.results[3].files | map(attribute='path') | sort }}"
+      vars:
+        sec_playbooks: "{{ sec_found.results[0].files | map(attribute='path') | list }}"
+        sec_roles_yaml: "{{ sec_found.results[1].files | map(attribute='path') | list }}"
+        sec_role_tasks: "{{ sec_roles_yaml | select('search', '/roles/[^/]+/tasks/[^/]+\\.yml\\Z') | list }}"
+        sec_inventory: "{{ sec_found.results[2].files | map(attribute='path') | list }}"
+
+    - name: Collect every task of the playbooks and role task files
+      ansible.builtin.set_fact:
+        sec_tasks: >-
+          {%- set ns = namespace(out=[], queue=[]) -%}
+          {%- for f in sec_yaml_files -%}
+          {%-   set ns.queue = lookup('ansible.builtin.file', f) | from_yaml or [] -%}
+          {%-   for _ in range(2000) if ns.queue | length > 0 -%}
+          {%-     set t = ns.queue | first -%}
+          {%-     set ns.queue = ns.queue[1:] -%}
+          {%-     if t is mapping and 'hosts' in t -%}
+          {%-       set ns.queue = ns.queue + (t.pre_tasks | default([]) or []) + (t.tasks | default([]) or [])
+                                   + (t.post_tasks | default([]) or []) + (t.handlers | default([]) or []) -%}
+          {%-     elif t is mapping and 'block' in t -%}
+          {%-       set ns.out = ns.out + [{'file': f | replace(sec_root ~ '/', ''), 'name': t.name | default(''), 'task': t}] -%}
+          {%-       set ns.queue = ns.queue + (t.block or []) + (t.rescue | default([]) or []) + (t.always | default([]) or []) -%}
+          {%-     elif t is mapping -%}
+          {%-       set ns.out = ns.out + [{'file': f | replace(sec_root ~ '/', ''), 'name': t.name | default(''), 'task': t}] -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+
+    - name: Check that the walk found the tasks
+      ansible.builtin.assert:
+        that:
+          - sec_yaml_files | length >= 20
+          - sec_tasks | length >= 200
+          - sec_script_files | length >= 10
+        fail_msg: "walked {{ sec_yaml_files | length }} files, {{ sec_tasks | length }} tasks, {{ sec_script_files | length }} scripts"
+
+    # --- 1-3: no shell, no sudo, argv with '$' not expanded --------------------------------------------------------
+    - name: Check there is no shell, no hard-coded become method and no sudo
+      ansible.builtin.assert:
+        that:
+          - sec_shell_tasks | length == 0
+          - sec_become_method_tasks | length == 0
+          - sec_sudo_tasks | length == 0
+          - sec_expanded_dollar_tasks | length == 0
+        fail_msg: >-
+          shell or raw: {{ sec_shell_tasks }}; become_method: {{ sec_become_method_tasks }}; sudo in a command:
+          {{ sec_sudo_tasks }}; argv with '$' without expand_argument_vars false: {{ sec_expanded_dollar_tasks }}
+      vars:
+        sec_shell_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks -%}
+          {%-   if e.task.keys() | select('in', sec_shell_modules) | list | length > 0 -%}
+          {%-     set ns.out = ns.out + [e.file ~ ': ' ~ e.name] -%}
+          {%-   endif -%}
+          {%-   for m in sec_raw_modules if m in e.task and ((e.task[m] | string) is search('\{\{|\{%') or e.task.args is defined) -%}
+          {%-     set ns.out = ns.out + [e.file ~ ': ' ~ e.name ~ ' (raw with variables)'] -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_become_method_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks if 'become_method' in e.task -%}
+          {%-   set ns.out = ns.out + [e.file ~ ': ' ~ e.name] -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_sudo_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks -%}
+          {%-   for m in sec_command_modules if m in e.task and (e.task[m] | string) is search('(?:^|[^A-Za-z0-9_])sudo(?:[^A-Za-z0-9_]|$)') -%}
+          {%-     set ns.out = ns.out + [e.file ~ ': ' ~ e.name] -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_expanded_dollar_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks -%}
+          {%-   for m in sec_command_modules if m in e.task and e.task[m] is mapping -%}
+          {%-     if ((e.task[m].argv | default('')) | string | regex_replace('\{\{.*?\}\}', '')) is search('\$')
+                    and (e.task[m].expand_argument_vars | default(true)) is not false -%}
+          {%-       set ns.out = ns.out + [e.file ~ ': ' ~ e.name] -%}
+          {%-     endif -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+
+    # --- 4: least-privilege modes ---------------------------------------------------------------------------------
+    - name: Check there is no 0777 mode anywhere and directories use the directory mode
+      ansible.builtin.assert:
+        that:
+          - sec_777_files | length == 0
+          - sec_dir_mode_tasks | length == 0
+          - sec_dir_mode_count > 0
+        fail_msg: >-
+          0777 found in: {{ sec_777_files }}; directories created without oracle_common_modes.dir: {{ sec_dir_mode_tasks }}
+          ({{ sec_dir_mode_count }} directory task(s) checked)
+      vars:
+        sec_777_files: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for f in sec_all_yaml_files + sec_script_files + [sec_root ~ '/ansible.cfg'] if lookup('ansible.builtin.file', f) is search(sec_re_777) -%}
+          {%-   set ns.out = ns.out + [f | replace(sec_root ~ '/', '')] -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        # Tasks of the roles that create a directory with a mode: the mode must be the directory mode.
+        sec_dir_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks if e.file is match('roles/') -%}
+          {%-   for m in sec_file_modules if m in e.task and e.task[m] is mapping and (e.task[m].state | default('')) == 'directory'
+                                              and 'mode' in e.task[m] and not (e.task[m].recurse | default(false)) -%}
+          {%-     set ns.out = ns.out + [{'where': e.file ~ ': ' ~ e.name, 'mode': e.task[m].mode | string}] -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_dir_mode_count: "{{ sec_dir_tasks | length }}"
+        sec_dir_mode_tasks: "{{ sec_dir_tasks | rejectattr('mode', 'search', '\\.dir(?![A-Za-z0-9_])') | map(attribute='where') | list }}"
+
+    # --- 5: TLS and checksum, no controller shell -----------------------------------------------------------------
+    - name: Check every download verifies TLS and the checksum and hides its secrets
+      ansible.builtin.assert:
+        that:
+          - sec_get_url | length >= 1
+          - sec_get_url_bad | length == 0
+          - sec_pipe_files | length == 0
+        fail_msg: "insecure get_url: {{ sec_get_url_bad }}; lookup('pipe') in: {{ sec_pipe_files }}"
+      vars:
+        sec_get_url: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for e in sec_tasks -%}
+          {%-   for m in sec_get_url_modules if m in e.task -%}
+          {%-     set ns.out = ns.out + [{'where': e.file ~ ': ' ~ e.name, 'args': e.task[m], 'no_log': e.task.no_log | default(false)}] -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_get_url_bad: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for g in sec_get_url -%}
+          {%-   set a = g.args -%}
+          {%-   if not ((a.validate_certs | default(true) | string) is search('oracle_common_patch_validate_certs'))
+                  or not ((a.checksum | default('') | string) is search('oracle_common_patch_checksum'))
+                  or not ((a.mode | default('') | string) is search('oracle_common_modes\.file'))
+                  or ('url_password' in a and not ((a.url_password | string) is search('oracle_common_patch_repo_password')))
+                  or ('use_proxy' in a and (a.use_proxy | string | lower) in ['true', 'yes'])
+                  or g.no_log is not true -%}
+          {%-     set ns.out = ns.out + [g.where] -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        sec_pipe_files: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for f in sec_all_yaml_files
+                if lookup('ansible.builtin.file', f) | regex_replace('(?m)#.*$', '') is search("lookup\(\s*'(?:ansible\.builtin\.)?pipe'") -%}
+          {%-   set ns.out = ns.out + [f | replace(sec_root ~ '/', '')] -%}
+          {%- endfor -%}
+          {{ ns.out }}
+
+    # --- 6: ansible.cfg -------------------------------------------------------------------------------------------
+    - name: Check ansible.cfg keeps host key checking on and no world-readable temporary files
+      ansible.builtin.assert:
+        that:
+          - sec_cfg is not search('(?mi)^\s*host_key_checking\s*=\s*(false|no|0|off)\s*$')
+          - sec_cfg is search('(?mi)^\s*host_key_checking\s*=\s*true\s*$')
+          - sec_cfg is not search('(?mi)^\s*allow_world_readable_tmpfiles\s*=')
+        fail_msg: "ansible.cfg weakens host key checking or allows world-readable temporary files"
+      vars:
+        sec_cfg: "{{ lookup('ansible.builtin.file', sec_root ~ '/ansible.cfg') }}"
+
+    # --- 7: secure defaults ----------------------------------------------------------------------------------------
+    - name: Check the secure defaults
+      ansible.builtin.assert:
+        that:
+          - (sec_staging.oracle_common_staging_base | string) is not match('/tmp(?:/|$)')
+          - sec_modes.oracle_common_dir_mode == '0750'
+          - sec_modes.oracle_common_file_mode == '0640'
+          - sec_modes.oracle_common_script_permission is search("default\('0750'\)")
+          - sec_patch.oracle_common_patch_validate_certs is true
+          - sec_patch.oracle_common_patch_use_proxy is false
+          - sec_patch.oracle_common_patch_repo_password is search('vault_patch_repo_password')
+        fail_msg: "a security default changed: {{ sec_staging }} {{ sec_modes }} {{ sec_patch }}"
+      vars:
+        sec_staging: "{{ lookup('ansible.builtin.file', sec_root ~ '/roles/oracle_common/defaults/main/staging.yml') | from_yaml }}"
+        sec_modes: "{{ lookup('ansible.builtin.file', sec_root ~ '/roles/oracle_common/defaults/main/modes.yml') | from_yaml }}"
+        sec_patch: "{{ lookup('ansible.builtin.file', sec_root ~ '/roles/oracle_common/defaults/main/patch.yml') | from_yaml }}"

@@ -10,3 +10,9 @@ __oracle_common_package_manager: ""
 __oracle_common_package_query_command: []
 __oracle_common_package_query_regex: ""
 __oracle_common_prereq_packages: []
+# Group membership (initialization_role tasks/group_membership.yml), as argument vectors. Add: <command...> <member>
+# <group> (the original command). Members: <command...> <group> through NSS (local files, LDAP, SSSD); the regex
+# captures the comma-separated member field of "name:x:gid:a,b,c".
+__oracle_common_group_add_command: [/bin/gpasswd, --add]
+__oracle_common_group_members_command: [/usr/bin/getent, group]
+__oracle_common_group_members_regex: '\A[^:]*:[^:]*:[^:]*:(.*)\Z'

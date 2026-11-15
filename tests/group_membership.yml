@@ -1,0 +1,230 @@
+---
+# Group membership regression test for roles/initialization_role tasks/group_membership.yml (U3: become instead of a raw
+# sudo, argv instead of a shell, exact membership check). Runs on the controller only and changes nothing outside a
+# temporary directory: the per-OS lookup and add commands are replaced with stub scripts that print a group line and
+# record their arguments, and become is turned off for the play (ansible_become: false overrides the task keyword), so
+# no privilege is used. Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/group_membership.yml
+#
+# 1. A member whose name is only a substring of a listed member (oracle vs oracle2) is added (the original grep
+#    treated it as present); the add command gets the member and the group as separate arguments.
+# 2. A member already in the group is not added (idempotent), on the Linux (getent) and AIX (lsgroup) formats.
+# 3. A value with shell metacharacters reaches the command as one literal argument and runs nothing.
+# 4. A failed group lookup fails the task.
+# 5. Structure: the add task becomes oracle_common_group_membership_become_user, no task uses a shell or sudo, and
+#    initialization_role includes the file once per distinct user.
+- name: Group membership regression test
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  gather_subset: [min]
+  vars:
+    ansible_become: false
+    oracle_common_group_name: oinstall
+    oracle_common_group_membership_become_user: root
+    gm_task_file: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/group_membership.yml') | from_yaml }}"
+    gm_main_file: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/main.yml') | from_yaml }}"
+  tasks:
+    - name: Run the group membership cases
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: group_membership.
+          register: gm_tmp
+
+        - name: Create the stub uname, lookup and add commands
+          ansible.builtin.copy:
+            dest: "{{ gm_tmp.path }}/{{ item.name }}"
+            mode: "0700"
+            content: "{{ item.content }}"
+          loop:
+            # Prints $GM_GROUP_LINE (or fails with $GM_LOOKUP_RC) and records its arguments.
+            - name: members
+              content: |
+                #!/bin/sh
+                printf '%s\n' "$@" > "{{ gm_tmp.path }}/members.args"
+                [ "${GM_LOOKUP_RC:-0}" -eq 0 ] || exit "$GM_LOOKUP_RC"
+                printf '%s\n' "$GM_GROUP_LINE"
+            # uname stub: the task file accepts AIX and Linux only; the controller running the test may be another system.
+            - name: uname
+              content: |
+                #!/bin/sh
+                echo Linux
+            # Records one call per line: its arguments separated by '|'.
+            - name: add
+              content: |
+                #!/bin/sh
+                old_ifs=$IFS; IFS='|'; printf '%s\n' "$*" >> "{{ gm_tmp.path }}/add.calls"; IFS=$old_ifs
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Set the stub commands
+          ansible.builtin.set_fact:
+            oracle_common_group_add_command: ["{{ gm_tmp.path }}/add"]
+            oracle_common_group_members_command: ["{{ gm_tmp.path }}/members", group]
+            oracle_common_group_members_regex: '\A[^:]*:[^:]*:[^:]*:(.*)\Z'
+
+        # --- 1. substring of a listed member: added ------------------------------------------------------
+        - name: Add oracle to a group listing oracle2 and grid
+          ansible.builtin.include_tasks:
+            file: ../roles/initialization_role/tasks/group_membership.yml
+            apply:
+              environment:
+                PATH: "{{ gm_tmp.path }}:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+                GM_GROUP_LINE: "oinstall:x:54321:oracle2,grid"
+          vars:
+            __initialization_role_member: oracle
+
+        - name: Read the add calls (case 1)
+          ansible.builtin.slurp:
+            src: "{{ gm_tmp.path }}/add.calls"
+          register: gm_calls_1
+
+        - name: Check oracle was added with separate arguments (case 1)
+          ansible.builtin.assert:
+            that:
+              - (gm_calls_1.content | b64decode).splitlines() == ['oracle|oinstall']
+              - __initialization_role_group_members == ['oracle2', 'grid']
+              - __initialization_role_group_add is changed
+            fail_msg: "unexpected add calls: {{ gm_calls_1.content | b64decode }}"
+
+        - name: Read the lookup arguments (case 1)
+          ansible.builtin.slurp:
+            src: "{{ gm_tmp.path }}/members.args"
+          register: gm_lookup_args
+
+        - name: Check the lookup got the group as its own argument (case 1)
+          ansible.builtin.assert:
+            that: (gm_lookup_args.content | b64decode).splitlines() == ['group', 'oinstall']
+
+        # --- 2. already a member: nothing runs ------------------------------------------------------------
+        - name: Grid is already in the group (getent format)
+          ansible.builtin.include_tasks:
+            file: ../roles/initialization_role/tasks/group_membership.yml
+            apply:
+              environment:
+                PATH: "{{ gm_tmp.path }}:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+                GM_GROUP_LINE: "oinstall:x:54321:oracle2, grid"
+          vars:
+            __initialization_role_member: grid
+
+        - name: Oracle is already in the group (AIX lsgroup format)
+          ansible.builtin.include_tasks:
+            file: ../roles/initialization_role/tasks/group_membership.yml
+            apply:
+              environment:
+                PATH: "{{ gm_tmp.path }}:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+                GM_GROUP_LINE: "oinstall users=grid,oracle"
+          vars:
+            __initialization_role_member: oracle
+            oracle_common_group_members_regex: 'users=(\S*)'
+
+        - name: Read the add calls (case 2)
+          ansible.builtin.slurp:
+            src: "{{ gm_tmp.path }}/add.calls"
+          register: gm_calls_2
+
+        - name: Check no add command ran for existing members (case 2)
+          ansible.builtin.assert:
+            that:
+              - (gm_calls_2.content | b64decode).splitlines() == ['oracle|oinstall']
+              - __initialization_role_group_members == ['grid', 'oracle']
+            fail_msg: "unexpected add calls: {{ gm_calls_2.content | b64decode }}"
+
+        # --- 3. shell metacharacters stay one literal argument --------------------------------------------
+        - name: Add a member name with shell metacharacters
+          ansible.builtin.include_tasks:
+            file: ../roles/initialization_role/tasks/group_membership.yml
+            apply:
+              environment:
+                PATH: "{{ gm_tmp.path }}:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+                GM_GROUP_LINE: "oinstall:x:54321:"
+          vars:
+            __initialization_role_member: "x;touch {{ gm_tmp.path }}/pwned;$(touch {{ gm_tmp.path }}/pwned2)"
+
+        - name: Read the add calls (case 3)
+          ansible.builtin.slurp:
+            src: "{{ gm_tmp.path }}/add.calls"
+          register: gm_calls_3
+
+        - name: Look for files a shell would have created (case 3)
+          ansible.builtin.stat:
+            path: "{{ gm_tmp.path }}/{{ item }}"
+          loop: [pwned, pwned2]
+          register: gm_pwned
+
+        - name: Check the value was passed literally and ran nothing (case 3)
+          ansible.builtin.assert:
+            that:
+              - (gm_calls_3.content | b64decode).splitlines()[-1]
+                == 'x;touch ' ~ gm_tmp.path ~ '/pwned;$(touch ' ~ gm_tmp.path ~ '/pwned2)|oinstall'
+              - gm_pwned.results | selectattr('stat.exists') | list | length == 0
+
+        # --- 4. a failed lookup fails ----------------------------------------------------------------------
+        - name: Look up a group that does not exist
+          block:
+            - name: Run the group membership with a failing lookup
+              ansible.builtin.include_tasks:
+                file: ../roles/initialization_role/tasks/group_membership.yml
+                apply:
+                  environment:
+                    PATH: "{{ gm_tmp.path }}:{{ ansible_env.PATH | default('/usr/bin:/bin') }}"
+                    GM_GROUP_LINE: ""
+                    GM_LOOKUP_RC: "2"
+              vars:
+                __initialization_role_member: oracle
+
+            - name: Fail when the missing group was accepted
+              ansible.builtin.set_fact:
+                gm_missing_group_accepted: true
+          rescue:
+            - name: Note the refusal of the missing group
+              ansible.builtin.set_fact:
+                gm_missing_group_refused: true
+
+        - name: Check the missing group was refused (case 4)
+          ansible.builtin.assert:
+            that:
+              - gm_missing_group_refused | default(false)
+              - not (gm_missing_group_accepted | default(false))
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ gm_tmp.path }}"
+            state: absent
+          when: gm_tmp.path is defined
+
+    # --- 5. structure ----------------------------------------------------------------------------------------
+    - name: Check the structure of group_membership.yml and its include
+      ansible.builtin.assert:
+        that:
+          - gm_add_tasks | length == 1
+          - gm_add_tasks[0].become | default(false) is true
+          - gm_add_tasks[0].become_user is search('oracle_common_group_membership_become_user')
+          - gm_add_tasks[0].become_method is not defined
+          - gm_file_text is not search('sudo')
+          - gm_task_file | selectattr('shell', 'defined') | list | length == 0
+          - gm_task_file | selectattr('ansible.builtin.shell', 'defined') | list | length == 0
+          - gm_includes | length == 1
+          - gm_includes[0].loop is search('\| unique')
+          - gm_includes[0].loop is search('oracle_common_patch_owner')
+        fail_msg: "group_membership.yml structure: add tasks {{ gm_add_tasks }}, includes {{ gm_includes }}"
+      vars:
+        gm_file_text: >-
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/initialization_role/tasks/group_membership.yml')
+             | regex_replace('(?m)#.*$', '') }}
+        gm_add_tasks: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for t in gm_task_file if 'oracle_common_group_add_command' in ((t['ansible.builtin.command'] | default({}))['argv'] | default('')) -%}
+          {%-   set ns.out = ns.out + [t] -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        gm_includes: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for b in gm_main_file if b.block is defined -%}
+          {%-   for t in b.block if t['ansible.builtin.include_tasks'] | default('') == 'group_membership.yml' -%}
+          {%-     set ns.out = ns.out + [t] -%}
+          {%-   endfor -%}
+          {%- endfor -%}
+          {{ ns.out }}

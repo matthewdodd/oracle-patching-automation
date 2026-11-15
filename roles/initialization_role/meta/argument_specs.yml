@@ -15,8 +15,11 @@ argument_specs:
         like the fixed names (removed and re-created every run), so the next run can use it again.
       - Checks the prerequisite packages of the OS release (oracle_common packages.yml), verifies (exact process name)
         that sid_server_dict[<SID>].dbowner owns every running database in scope (DATABASE_NAME must be running), adds the
-        database owner and the patch staging owner to oracle_common_group_name (when
-        oracle_common_manage_group_membership is true), stages the patch scripts, detects the database version
+        database owner and the patch staging owner to oracle_common_group_name once each (when
+        oracle_common_manage_group_membership is true; exact membership check, change through Ansible become as
+        oracle_common_group_membership_become_user, no raw sudo), creates the working directories with
+        oracle_common_dir_mode (0750; a world-writable parent without the sticky bit is refused), stages the patch scripts
+        (oracle_common_script_permission, 0750), detects the database version
         and resolves the patch bundle (oracle_common oracle_version_select.yml and patch_artifact.yml).
       - Passes ORA_ENV_FILE and ORA_WORK_DIR to database_version.bash, and adds the README patterns of the Oracle
         version to oracle_common_script_env (oracle_common preflight_script_env.yml).

@@ -56,6 +56,20 @@ to_lower() {
   printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+# PATH without empty, "." or other relative entries. An environment file that puts "." (or an empty entry, which means
+# the same) in PATH would make every command name resolve against the current directory first; the scripts must only
+# run the Oracle and system tools from absolute directories.
+safe_path() {
+  local entry out=""
+  local -a entries=()
+  IFS=: read -r -a entries <<<"$1"
+  for entry in ${entries[@]+"${entries[@]}"}; do
+    [[ $entry == /* ]] || continue
+    out=${out:+$out:}$entry
+  done
+  printf '%s' "$out"
+}
+
 source_env_file() {
   local f=$1
   if ! is_safe_path "$f" || [[ ! -f $f ]]; then
@@ -75,6 +89,8 @@ source_env_file() {
   # shellcheck source=/dev/null  # the database environment file is site-specific and only known at run time
   . "$f"
   set -u
+  PATH=$(safe_path "$PATH")
+  export PATH
   export ORACLE_SID
   return 0
 }

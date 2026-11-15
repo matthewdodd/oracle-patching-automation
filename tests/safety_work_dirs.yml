@@ -103,7 +103,7 @@
           ansible.builtin.set_fact:
             explicit_scripts: "{{ wd_tmp.path }}/my_scripts"
             explicit_output: "{{ wd_tmp.path }}/my_output"
-            oracle_common_modes: {script: "0700"}
+            oracle_common_modes: {script: "0700", dir: "0700", file: "0600"}
 
         # Run 1 and run 2 (the second finds what the first left): the same steps as initialization_role (tasks/main.yml).
         - name: Choose the directories of run r1

@@ -15,7 +15,6 @@
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 # database_ctl.bash stop: 0 = stopped (or already stopped), anything else = the database is still running.
 - name: Shutdown oracle database {{ ORACLE_SID }}
@@ -32,7 +31,6 @@
   failed_when: false
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 - name: print Shutdown db status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
   ansible.builtin.debug:

@@ -100,6 +100,14 @@ __oracle_common_datapatch_startup_modes: [upgrade, normal]
 # the normalised value (oracle_common_modes.<name>), so the checked mode and the applied mode are the same.
 __oracle_common_mode_inputs:
   script: "{{ oracle_common_script_permission }}"
+  dir: "{{ oracle_common_dir_mode }}"
+  file: "{{ oracle_common_file_mode }}"
 # Input variable name shown in the error for each mode above (the alias users set most often).
 __oracle_common_mode_input_names:
   script: oracle_common_script_permission (alias script_permission)
+  dir: oracle_common_dir_mode
+  file: oracle_common_file_mode
+# Permissions applied recursively to the extracted patch (the original chmod -R 777): the owner keeps read and write,
+# the group may read, others get nothing; directories (and files that are already executable) keep their execute bit
+# for the owner and the group (X), so OPatch can still traverse the tree and run the patch's own scripts.
+__oracle_common_staging_tree_mode: "u=rwX,g=rX,o="

@@ -32,6 +32,26 @@ oracle_common_patch_repo_version_check: true
 # Plain http repository URLs are rejected. Opt-in only, knowingly: the patch could be tampered with in transit.
 oracle_common_patch_repo_allow_http: false
 
+# --- Download transport and credentials -------------------------------------------------------------
+# The download (oracle_database_patch_role tasks/copy_files_to_server.yml, run on the target) verifies the TLS
+# certificate of the repository (the original did not). Turning it off is an opt-in for a repository with a
+# certificate the target cannot verify; prefer oracle_common_patch_ca_path. The bundle's checksum
+# (oracle_common_patch_checksum) is verified either way.
+oracle_common_patch_validate_certs: true
+# Optional CA bundle (PEM file on the target), e.g. an internal CA. Empty: the system trust store.
+oracle_common_patch_ca_path: ""
+# Use a proxy for the download. Default false (the original use_proxy: no). When true, the proxy environment of the
+# connection is used, or oracle_common_patch_proxy when set (e.g. http://proxy.example.com:8080; no default).
+oracle_common_patch_use_proxy: false
+oracle_common_patch_proxy: ""
+# Repository credentials for HTTP basic authentication, from the Ansible Vault (vault_patch_repo_username,
+# vault_patch_repo_password) or an AAP credential; never put them in the repository URL. Empty (the default): no
+# credentials are sent, as before (a URL that still carries user-info keeps working, but is discouraged).
+oracle_common_patch_repo_username: "{{ vault_patch_repo_username | default('') }}"
+oracle_common_patch_repo_password: "{{ vault_patch_repo_password | default('') }}"
+# Send the credentials with the first request (the original force_basic_auth: yes) instead of waiting for a 401.
+oracle_common_patch_force_basic_auth: true
+
 # --- Staging ----------------------------------------------------------------------------------
 # Database layout: false = Oracle (the patch is staged under oracle_common_patch_base_dir_oracle by
 # oracle_common_patch_owner_oracle), true = Grid (oracle_common_patch_base_dir_grid,

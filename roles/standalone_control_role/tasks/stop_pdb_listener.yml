@@ -14,7 +14,6 @@
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 - name: Stopping PDB listener for {{ ORACLE_SID ~ ' on ' ~ server_name }}
   ansible.builtin.command:
@@ -37,7 +36,6 @@
   failed_when: standalone_control_role_pdb_listener_stop_status.rc not in [0, 4]
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 - name: Show stop pdb listener script status for {{ ORACLE_SID }}
   ansible.builtin.debug:

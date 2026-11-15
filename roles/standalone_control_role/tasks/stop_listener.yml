@@ -16,7 +16,6 @@
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 - name: Stop the database listener {{ sid_server_dict[standalone_control_role_sid_key].dbListener ~ ' of ' ~ ORACLE_SID ~ ' on ' ~ server_name }}
   ansible.builtin.command:
@@ -39,7 +38,6 @@
   failed_when: standalone_control_role_listener_stop_status.rc not in [0, 4]
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
 - name: print listener_stop_status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
   ansible.builtin.debug:

@@ -234,20 +234,20 @@
           - oracle_common_run.unique == true
           - oracle_common_run.primary == 'ORCL01'
           - oracle_common_run.scope == ['ORCL01', 'ORCL02']
-          - oracle_common_run.script_dir == '/tmp/ora_ansible_scripts_ORCL01_r1'
-          - oracle_common_run.output_root == '/tmp/ora_db_patch_ORCL01_r1'
+          - oracle_common_run.script_dir == '/u01/oracle/ansible_patch_work/ora_ansible_scripts_ORCL01_r1'
+          - oracle_common_run.output_root == '/u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1'
           - oracle_common_run.databases.ORCL01 == expected_orcl01
           - oracle_common_run.databases.ORCL02 == expected_orcl02
           - oracle_common_script_env.ORCL01 == expected_env_orcl01
           - oracle_common_script_env.ORCL02.ORA_ENV_FILE == '/local/ORCL02.env'
-          - oracle_common_script_env.ORCL02.ORA_WORK_DIR == '/tmp/ora_db_patch_ORCL01_r1/ORCL02'
+          - oracle_common_script_env.ORCL02.ORA_WORK_DIR == '/u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1/ORCL02'
         fail_msg: "unexpected: {{ oracle_common_run }} / {{ oracle_common_script_env }}"
       vars:
-        expected_orcl01: {env_file: /local/ORCL01.env, work_dir: /tmp/ora_db_patch_ORCL01_r1, dbowner: oracle}
-        expected_orcl02: {env_file: /local/ORCL02.env, work_dir: /tmp/ora_db_patch_ORCL01_r1/ORCL02, dbowner: oracle}
+        expected_orcl01: {env_file: /local/ORCL01.env, work_dir: /u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1, dbowner: oracle}
+        expected_orcl02: {env_file: /local/ORCL02.env, work_dir: /u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1/ORCL02, dbowner: oracle}
         expected_env_orcl01:
           ORA_ENV_FILE: /local/ORCL01.env
-          ORA_WORK_DIR: /tmp/ora_db_patch_ORCL01_r1
+          ORA_WORK_DIR: /u01/oracle/ansible_patch_work/ora_db_patch_ORCL01_r1
           ORA_ORATAB: /etc/oratab
           ORA_ENV_GLOB: /local/*.env
           ORA_OPATCH_BACKUP_DIR: /u01/opatch_backup
@@ -300,13 +300,17 @@
       ansible.builtin.assert:
         that:
           - oracle_common_run.unique == false
-          - oracle_common_run.script_dir == '/tmp/ora_ansible_scripts_ORCL01'
-          - oracle_common_run.databases.ORCL01.work_dir == '/tmp/ora_db_patch_ORCL01'
+          - oracle_common_run.script_dir == '/u01/oracle/ansible_patch_work/ora_ansible_scripts_ORCL01'
+          - oracle_common_run.databases.ORCL01.work_dir == '/u01/oracle/ansible_patch_work/ora_db_patch_ORCL01'
           - oracle_common_script_env.ORCL01 == expected_env_fixed
           - __oracle_common_run_staging_dir == '/u01/oracle/software_dir/19.0/jan26_ORCL01'
         fail_msg: "unexpected: {{ oracle_common_run }} / {{ oracle_common_script_env }}"
       vars:
-        expected_env_fixed: {ORA_ENV_FILE: /local/ORCL01.env, ORA_WORK_DIR: /tmp/ora_db_patch_ORCL01, ORA_ORATAB: /etc/oratab, ORA_ENV_GLOB: /local/*.env}
+        expected_env_fixed:
+          ORA_ENV_FILE: /local/ORCL01.env
+          ORA_WORK_DIR: /u01/oracle/ansible_patch_work/ora_db_patch_ORCL01
+          ORA_ORATAB: /etc/oratab
+          ORA_ENV_GLOB: /local/*.env
         oracle_patch_unique_work_dirs: "false"
         oracle_common_patch: {staging_dir: /u01/oracle/software_dir/19.0/jan26_ORCL01}
         oracle_common_patch_staging_dir: ""

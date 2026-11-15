@@ -234,6 +234,69 @@
         set: {DATABASE_NAME: 1ORCL, oracle_common_patch_checksum: "sha256:{{ '0' * 64 }}", oracle_common_script_permission: 511}
         errors: ["DATABASE_NAME:", oracle_common_patch_checksum, "got 0777"]
         count: 3
+      # --- U3: least-privilege modes and ownership ----------------------------------------------------
+      - {name: dir mode int 511 (unquoted 0777), set: {oracle_common_dir_mode: 511}, errors: [oracle_common_dir_mode, "got 0777"]}
+      - {name: dir mode string 0777, set: {oracle_common_dir_mode: "0777"}, errors: [oracle_common_dir_mode, "got 0777"]}
+      - {name: dir mode group-writable 0770, set: {oracle_common_dir_mode: "0770"}, errors: [oracle_common_dir_mode, "got 0770"]}
+      - {name: dir mode 0700, set: {oracle_common_dir_mode: "0700"}, errors: []}
+      - {name: file mode world-writable 0666, set: {oracle_common_file_mode: "0666"}, errors: [oracle_common_file_mode, "got 0666"]}
+      - {name: file mode int 420 (unquoted 0644), set: {oracle_common_file_mode: 420}, errors: []}
+      - name: every mode 0777
+        set: {oracle_common_script_permission: "0777", oracle_common_dir_mode: "0777", oracle_common_file_mode: "0777"}
+        errors: [oracle_common_script_permission, oracle_common_dir_mode, oracle_common_file_mode]
+      - {name: work group with a shell command, set: {oracle_common_work_group: "oinstall;id"}, errors: [oracle_common_work_group]}
+      - {name: work group oinstall, set: {oracle_common_work_group: oinstall}, errors: []}
+      - name: work group placeholder
+        set: {oracle_common_work_group: <CHANGE_ME>}
+        errors: [oracle_common_work_group, "still the placeholder"]
+        count: 2
+      # --- U3: group membership through become -------------------------------------------------------
+      - {name: group become user with a space, set: {oracle_common_group_membership_become_user: "ro ot"}, errors: [oracle_common_group_membership_become_user]}
+      - name: group add command as a shell string
+        set: {oracle_common_group_add_command: "sudo /bin/gpasswd --add"}
+        errors: [oracle_common_group_add_command]
+      - name: group members command with a relative program
+        set: {oracle_common_group_members_command: [getent, group]}
+        errors: [oracle_common_group_members_command]
+      - {name: group add command empty, set: {oracle_common_group_add_command: []}, errors: [oracle_common_group_add_command]}
+      - {name: group members regex empty, set: {oracle_common_group_members_regex: ""}, errors: [oracle_common_group_members_regex]}
+      - name: group commands ignored without group membership
+        set: {oracle_common_manage_group_membership: false, oracle_common_group_add_command: "x", oracle_common_group_name: ""}
+        errors: []
+      # --- U3: download TLS, proxy and credentials ---------------------------------------------------
+      - name: validate_certs not a boolean
+        set: {oracle_common_patch_validate_certs: maybe}
+        errors: ["oracle_common_patch_validate_certs: must be true or false"]
+      - {name: validate_certs false (opt-in), set: {oracle_common_patch_validate_certs: false}, errors: []}
+      - {name: use_proxy legacy string, set: {oracle_common_patch_use_proxy: "no"}, errors: []}
+      - {name: force_basic_auth not a boolean, set: {oracle_common_patch_force_basic_auth: sometimes}, errors: ["must be true or false"]}
+      - {name: CA path relative, set: {oracle_common_patch_ca_path: certs/ca.pem}, errors: [oracle_common_patch_ca_path]}
+      - {name: CA path with '..', set: {oracle_common_patch_ca_path: /etc/pki/../ca.pem}, errors: [oracle_common_patch_ca_path]}
+      - {name: CA path absolute, set: {oracle_common_patch_ca_path: /etc/pki/ca-trust/source/anchors/repo-ca.pem}, errors: []}
+      - name: proxy without a scheme
+        set: {oracle_common_patch_proxy: "proxy.example.com:8080"}
+        errors: [oracle_common_patch_proxy]
+        hidden: [oracle_common_patch_proxy]
+      - {name: proxy URL, set: {oracle_common_patch_use_proxy: true, oracle_common_patch_proxy: "http://proxy.example.com:8080"}, errors: []}
+      - name: repository user without a password
+        set: {oracle_common_patch_repo_username: repo_reader}
+        errors: ["set both or neither"]
+        hidden: [oracle_common_patch_repo_username]
+      - name: repository password without a user
+        set: {oracle_common_patch_repo_password: not-a-real-secret}
+        errors: ["set both or neither"]
+        hidden: [oracle_common_patch_repo_password]
+      - name: repository user with a colon
+        set: {oracle_common_patch_repo_username: "repo:reader", oracle_common_patch_repo_password: not-a-real-secret}
+        errors: ["set both or neither"]
+        hidden: [oracle_common_patch_repo_password]
+      - name: repository credentials
+        set: {oracle_common_patch_repo_username: repo_reader, oracle_common_patch_repo_password: not-a-real-secret}
+        errors: []
+      - name: repository password placeholder
+        set: {oracle_common_patch_repo_username: repo_reader, oracle_common_patch_repo_password: <CHANGE_ME>}
+        errors: [oracle_common_patch_repo_password, "still the placeholder"]
+        count: 1
       # --- the example inventory ships placeholders that must be rejected ----------------------------
       - name: example inventory placeholders
         set:

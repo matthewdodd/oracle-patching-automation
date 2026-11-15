@@ -1,0 +1,254 @@
+---
+# Regression test for the standalone_control_role start, rename and check tasks after U3 replaced their shell commands
+# (`<script> <args> &> >(tee <log>.$(date +%Y.%m.%d))`) with an argument vector: a static bash script that gets the log
+# prefix, the script and its arguments as positional parameters. Runs on the controller only, inside a temporary
+# directory, with stub scripts where the task does not copy the real one first; become is turned off for the play
+# (ansible_become: false overrides the task keyword). Run from the repository root:
+#   ansible-playbook -i localhost, -c local tests/standalone_commands.yml
+#
+# 1. start_database.yml: the script gets "start <SID>"; exit 0 passes, 4 fails the report task (as before), 1 fails.
+# 2. start_listener.yml: the script gets "start <SID> <listener>", the output is in the task result and in
+#    <remote_output_directory>/log.<start_listener_script>.<YYYY.MM.DD>, the exit code is the script's own; a listener
+#    value with shell metacharacters is split on whitespace only (the original word splitting) and runs nothing.
+# 3. rename_logs.yml and start_pdb_listener.yml copy and run the real scripts: an empty pdbListener is left out (the
+#    original word splitting), the log file names are the original ones, and the scripts' exit code 4 (here: missing
+#    environment file) is accepted by the command and reported by the next task, as before.
+- name: Standalone control commands regression test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../roles/standalone_control_role/defaults/main.yml
+    - ../roles/standalone_control_role/vars/main.yml
+  vars:
+    ansible_become: false
+    server_name: localhost
+    ORACLE_SID: orcl  # noqa: var-naming[pattern] - original fact name used by the role
+    oracle_common_bash_path: /bin/bash
+    oracle_common_modes: {script: "0750", dir: "0750", file: "0640"}
+    sc_role: "{{ playbook_dir }}/../roles/standalone_control_role"
+  tasks:
+    - name: Run the standalone command cases
+      block:
+        - name: Create a temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: standalone_commands.
+          register: sc_tmp
+
+        - name: Read the current user
+          ansible.builtin.command:
+            argv: [id, -un]
+          register: sc_user
+          changed_when: false
+
+        - name: Set the working directories and the database entry
+          ansible.builtin.set_fact:
+            remote_script_directory: "{{ sc_tmp.path }}/scripts"
+            remote_output_directory: "{{ sc_tmp.path }}/output"
+            standalone_control_role_sid_key: orcl
+            sid_server_dict:
+              orcl: {dbowner: "{{ sc_user.stdout }}", pdb: "", dbvip: "", dbListener: LISTENER_ORCL, pdbListener: ""}
+            standalone_control_role_environment:
+              ORA_ENV_FILE: "{{ sc_tmp.path }}/missing/orcl.env"
+            sc_today: "{{ now(fmt='%Y.%m.%d') }}"
+            start_database_script: stub_database_ctl.bash
+
+        - name: Create the working directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: ["{{ remote_script_directory }}", "{{ remote_output_directory }}"]
+
+        # Stub: records its arguments (one per line) in <name>.args, prints a line and exits with $SC_RC (default 0).
+        - name: Create the stub scripts
+          ansible.builtin.copy:
+            dest: "{{ remote_script_directory }}/{{ item }}"
+            mode: "0700"
+            content: |
+              #!/bin/sh
+              printf '%s\n' "$@" > "$0.args"
+              echo "stub $(basename "$0") ran"
+              echo "stub stderr line" >&2
+              exit "${SC_RC:-0}"
+          loop: [stub_database_ctl.bash, listener_ctl.bash]
+
+        # --- 1. start_database.yml ----------------------------------------------------------------------------
+        - name: Start the database (exit 0)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ sc_role }}"
+            tasks_from: start_database
+
+        - name: Read the arguments of the database script (case 1)
+          ansible.builtin.slurp:
+            src: "{{ remote_script_directory }}/stub_database_ctl.bash.args"
+          register: sc_db_args
+
+        - name: Check the database script got "start <SID>" (case 1)
+          ansible.builtin.assert:
+            that:
+              - (sc_db_args.content | b64decode).splitlines() == ['start', 'orcl']
+              - db_start_status.rc == 0
+              - "'stub stub_database_ctl.bash ran' in db_start_status.stdout"
+
+        - name: Start the database with exit code 4
+          block:
+            - name: Start the database (exit 4)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ sc_role }}"
+                tasks_from: start_database
+              vars:
+                standalone_control_role_environment: {SC_RC: "4"}
+          rescue:
+            - name: Note the failed start (exit 4)
+              ansible.builtin.set_fact:
+                sc_db_failed_4: "{{ ansible_failed_task.name }}"
+
+        - name: Start the database with exit code 1
+          block:
+            - name: Start the database (exit 1)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ sc_role }}"
+                tasks_from: start_database
+              vars:
+                standalone_control_role_environment: {SC_RC: "1"}
+          rescue:
+            - name: Note the failed start (exit 1)
+              ansible.builtin.set_fact:
+                sc_db_failed_1: "{{ ansible_failed_task.name }}"
+
+        - name: Check exit 4 fails the report task and exit 1 the command (case 1)
+          ansible.builtin.assert:
+            that:
+              - sc_db_failed_4 | default('') is search('print start_database_script status')
+              - sc_db_failed_1 | default('') is search('start oracle database')
+            fail_msg: "exit 4 failed at '{{ sc_db_failed_4 | default('nothing') }}', exit 1 at '{{ sc_db_failed_1 | default('nothing') }}'"
+
+        # --- 2. start_listener.yml ----------------------------------------------------------------------------
+        - name: Start the listener (exit 0)
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ sc_role }}"
+            tasks_from: start_listener
+
+        - name: Read the listener arguments and the log (case 2)
+          ansible.builtin.slurp:
+            src: "{{ item }}"
+          loop:
+            - "{{ remote_script_directory }}/listener_ctl.bash.args"
+            - "{{ remote_output_directory }}/log.{{ start_listener_script }}.{{ sc_today }}"
+          register: sc_listener_files
+
+        - name: Check the listener arguments, the output and the log (case 2)
+          ansible.builtin.assert:
+            that:
+              - (sc_listener_files.results[0].content | b64decode).splitlines() == ['start', 'orcl', 'LISTENER_ORCL']
+              - listener_start_status.rc == 0
+              - "'stub listener_ctl.bash ran' in listener_start_status.stdout"
+              - "'stub stderr line' in listener_start_status.stdout"
+              - "'stub listener_ctl.bash ran' in (sc_listener_files.results[1].content | b64decode)"
+              - "'stub stderr line' in (sc_listener_files.results[1].content | b64decode)"
+
+        - name: Start a listener whose name holds shell metacharacters
+          ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+            name: "{{ sc_role }}"
+            tasks_from: start_listener
+          vars:
+            sid_server_dict:
+              orcl:
+                dbowner: "{{ sc_user.stdout }}"
+                pdb: ""
+                dbvip: ""
+                dbListener: "L1;touch {{ sc_tmp.path }}/pwned;$(touch {{ sc_tmp.path }}/pwned2)"
+                pdbListener: ""
+
+        - name: Read the listener arguments (metacharacters)
+          ansible.builtin.slurp:
+            src: "{{ remote_script_directory }}/listener_ctl.bash.args"
+          register: sc_listener_meta
+
+        - name: Look for files a shell would have created (case 2)
+          ansible.builtin.stat:
+            path: "{{ sc_tmp.path }}/{{ item }}"
+          loop: [pwned, pwned2]
+          register: sc_pwned
+
+        - name: Check the listener name was passed literally and ran nothing (case 2)
+          ansible.builtin.assert:
+            that:
+              # Split on whitespace like the original shell's word splitting, but every word stays literal.
+              - (sc_listener_meta.content | b64decode).splitlines()
+                == ['start', 'orcl', 'L1;touch', sc_tmp.path ~ '/pwned;$(touch', sc_tmp.path ~ '/pwned2)']
+              - sc_pwned.results | selectattr('stat.exists') | list | length == 0
+
+        - name: Start the listener with exit code 1
+          block:
+            - name: Start the listener (exit 1)
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ sc_role }}"
+                tasks_from: start_listener
+              vars:
+                standalone_control_role_environment: {SC_RC: "1"}
+          rescue:
+            - name: Note the failed listener start (exit 1)
+              ansible.builtin.set_fact:
+                sc_listener_failed_1: "{{ ansible_failed_result.rc | default('none') }}"
+
+        - name: Check the listener script's own exit code fails the task (case 2)
+          ansible.builtin.assert:
+            that: sc_listener_failed_1 | default('') | string == '1'
+            fail_msg: "exit 1 gave {{ sc_listener_failed_1 | default('no failure') }}"
+
+        # --- 3. rename_logs.yml and start_pdb_listener.yml (real scripts) --------------------------------------
+        - name: Rename the logs (real script, missing environment file)
+          block:
+            - name: Run rename_logs.yml
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ sc_role }}"
+                tasks_from: rename_logs
+          rescue:
+            - name: Note the reported rename_logs failure
+              ansible.builtin.set_fact:
+                sc_rename_failed: "{{ ansible_failed_task.name }}"
+
+        - name: Start the PDB listener (real script, missing environment file)
+          block:
+            - name: Run start_pdb_listener.yml
+              ansible.builtin.include_role:  # noqa: role-name[path] - repository role referenced by path from tests/
+                name: "{{ sc_role }}"
+                tasks_from: start_pdb_listener
+              vars:
+                sid_server_dict:
+                  orcl: {dbowner: "{{ sc_user.stdout }}", pdb: PDB1, dbvip: "", dbListener: LISTENER_ORCL, pdbListener: LISTENER_PDB1}
+          rescue:
+            - name: Note the reported PDB listener failure
+              ansible.builtin.set_fact:
+                sc_pdb_listener_failed: "{{ ansible_failed_task.name }}"
+
+        - name: Read the rename and PDB listener logs (case 3)
+          ansible.builtin.slurp:
+            src: "{{ remote_output_directory }}/{{ item }}.{{ sc_today }}"
+          loop: ["log.{{ rename_logs_script }}", log.start_PDB_listener]
+          register: sc_real_logs
+
+        - name: Check exit 4 is accepted by the command and reported by the next task (case 3)
+          ansible.builtin.assert:
+            that:
+              - rename_logs_status.rc == 4
+              - sc_rename_failed | default('') is search('print rename_logs_script status')
+              - listener_start_status.rc == 4
+              - sc_pdb_listener_failed | default('') is search('print start_listener_script status')
+              - (sc_real_logs.results[0].content | b64decode) is search('environment file')
+              - (sc_real_logs.results[1].content | b64decode) is search('environment file')
+              - rename_logs_status.cmd[-3:] == [remote_script_directory ~ '/' ~ rename_logs_script, 'orcl', 'LISTENER_ORCL']
+              - "'' not in rename_logs_status.cmd"
+            fail_msg: >-
+              rename rc {{ rename_logs_status.rc | default('none') }} failed at {{ sc_rename_failed | default('nothing') }};
+              PDB listener rc {{ listener_start_status.rc | default('none') }} failed at {{ sc_pdb_listener_failed | default('nothing') }};
+              cmd {{ rename_logs_status.cmd | default('none') }}
+      always:
+        - name: Remove the temporary directory
+          ansible.builtin.file:
+            path: "{{ sc_tmp.path }}"
+            state: absent
+          when: sc_tmp.path is defined

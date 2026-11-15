@@ -1,8 +1,10 @@
 ---
-## This script starts the PDB listener
+## This script starts the PDB listener. Logged as before (<remote_output_directory>/log.start_PDB_listener.<YYYY.MM.DD>);
+## the script and its arguments are positional parameters of a static bash script (no shell interpolation).
 
-- name: copy listener start script to {{ server_name }}
-  copy:
+- name: copy listener start script to {{ server_name }}  # noqa: name[casing] - original task name
+  # Short module name kept: tests/script_copy_become.yml looks the task up by the key 'copy'.
+  copy:  # noqa: fqcn[action-core]
     src: "{{ start_listener_script }}"
     dest: "{{ remote_script_directory }}/{{ start_listener_script }}"
     mode: "{{ oracle_common_modes.script }}"
@@ -12,25 +14,25 @@
   # world-writable (0777 removed), so the SSH user cannot write into it.
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: ansible.builtin.sudo
 
-- name: start listener {{ ORACLE_SID }} on {{ server_name }}
-  shell: >
-    {{ remote_script_directory }}/{{ start_listener_script }} start
-    {{ ORACLE_SID }} {{ sid_server_dict[standalone_control_role_sid_key].pdbListener }}
-    &> >(tee {{ remote_output_directory }}/log.start_PDB_listener.`date +"%Y.%m.%d"`)
-  args:
-    executable: /usr/bin/bash
+- name: start listener {{ ORACLE_SID ~ ' on ' ~ server_name }}  # noqa: name[casing] - original task name
+  ansible.builtin.command:
+    argv: >-
+      {{ [oracle_common_bash_path | default('/usr/bin/bash'), '-c', __standalone_control_role_logged_run, 'start_pdb_listener',
+          remote_output_directory ~ '/log.start_PDB_listener',
+          remote_script_directory ~ '/' ~ start_listener_script, 'start', ORACLE_SID]
+         + (sid_server_dict[standalone_control_role_sid_key].pdbListener | string).split() }}
+    expand_argument_vars: false
   delegate_to: "{{ server_name }}"
   # ORA_ENV_FILE of this database in a patch run (oracle_control_sid.yml); empty: the script default, as before.
   environment: "{{ standalone_control_role_environment }}"
-  register: listener_start_status
+  register: listener_start_status  # noqa: var-naming[no-role-prefix] - original register name
+  changed_when: true
   become: true
   become_user: "{{ sid_server_dict[standalone_control_role_sid_key].dbowner }}"
-  become_method: sudo
   failed_when: listener_start_status.rc != 4 and listener_start_status.rc != 0
 
-- name: print start_listener_script status for {{ ORACLE_SID }}
-  debug:
+- name: print start_listener_script status for {{ ORACLE_SID }}  # noqa: name[casing] - original task name
+  ansible.builtin.debug:
     msg: "{{ listener_start_status.stdout_lines }}"
   failed_when: listener_start_status.rc == 4

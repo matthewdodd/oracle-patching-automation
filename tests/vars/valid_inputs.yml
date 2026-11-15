@@ -35,3 +35,17 @@ validation_baseline:
   oracle_common_patch_cycle: jan
   oracle_common_patch_year: "26"
   oracle_common_patch_file_name: ""
+  oracle_common_dir_mode: "0750"
+  oracle_common_file_mode: "0640"
+  oracle_common_work_group: ""
+  oracle_common_group_membership_become_user: root
+  oracle_common_group_add_command: [/bin/gpasswd, --add]
+  oracle_common_group_members_command: [/usr/bin/getent, group]
+  oracle_common_group_members_regex: '\A[^:]*:[^:]*:[^:]*:(.*)\Z'
+  oracle_common_patch_validate_certs: true
+  oracle_common_patch_ca_path: ""
+  oracle_common_patch_use_proxy: false
+  oracle_common_patch_proxy: ""
+  oracle_common_patch_repo_username: ""
+  oracle_common_patch_repo_password: ""
+  oracle_common_patch_force_basic_auth: true

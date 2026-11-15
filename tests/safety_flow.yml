@@ -330,7 +330,7 @@
 
         - name: Set the run (per-run directories)
           ansible.builtin.set_fact:
-            oracle_common_modes: {script: "0700"}
+            oracle_common_modes: {script: "0700", dir: "0700", file: "0600"}
             oracle_common_run: {id: r1, unique: true}
             initialization_role_created_paths: []
 
