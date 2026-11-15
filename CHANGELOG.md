@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project intends to follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from its first tagged release.
 
-## [Unreleased]
+## [1.0.0] - 2026-11-15
 
 The production-readiness rework of the original playbooks. They run on a supported ansible-core, refuse to patch an
 Oracle home other databases still use, have no environment-specific values in code, and are secure by default. The
@@ -171,4 +171,4 @@ and migrating existing job templates".
   runs still upgrade OPatch, run utlrp and start a database that is not open, as before),
   `ORA_FAIL_ON_NEW_INVALID_OBJECTS`, explicit patch ids.
 - The prerequisite playbook still sends the "patching" cards (the `prereq` states exist but are unused, as before).
-- Real-host validation on RHEL 8/9/10 and AIX, and the Molecule scenarios in CI.
+- Real-host validation on RHEL 8/9/10 and AIX.
